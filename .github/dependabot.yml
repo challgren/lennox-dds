@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Keep the CI workflow actions current (checkout, buildx, login, build-push).
+  # This is also what clears the periodic "Node.js 20 is deprecated" warnings.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"
+
+  # Track the Docker base images in the container build (e.g. debian:bookworm[-slim]).
+  # The OpenDDS base is pinned via the BASE build-arg, so Dependabot leaves it alone.
+  - package-ecosystem: docker
+    directory: "/container"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      docker:
+        patterns: ["*"]
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "docker"
