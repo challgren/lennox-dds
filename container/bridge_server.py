@@ -90,6 +90,34 @@ def _load_addon_options() -> None:
     os.environ.setdefault("LENNOX_DOMAIN", str(opts.get("domain", 0)))
     os.environ.setdefault("DCPS_DEBUG", str(opts.get("dcps_debug", 0)))
 
+    # MQTT (optional): publish state + HA MQTT discovery. Broker comes from an
+    # explicit mqtt_host option, else the Supervisor `mqtt` service (Mosquitto).
+    if opts.get("mqtt_enabled"):
+        if opts.get("mqtt_host"):
+            os.environ.setdefault("MQTT_HOST", str(opts["mqtt_host"]))
+            os.environ.setdefault("MQTT_PORT", str(opts.get("mqtt_port", 1883)))
+            if opts.get("mqtt_user"):
+                os.environ.setdefault("MQTT_USER", str(opts["mqtt_user"]))
+            if opts.get("mqtt_password"):
+                os.environ.setdefault("MQTT_PASS", str(opts["mqtt_password"]))
+            print(f"[bridge-server] MQTT: using configured broker {opts['mqtt_host']}", flush=True)
+        else:
+            svc = _supervisor_request("GET", "/services/mqtt")
+            creds = (svc or {}).get("data") or {}
+            if creds.get("host"):
+                os.environ.setdefault("MQTT_HOST", str(creds["host"]))
+                os.environ.setdefault("MQTT_PORT", str(creds.get("port", 1883)))
+                if creds.get("username"):
+                    os.environ.setdefault("MQTT_USER", str(creds["username"]))
+                if creds.get("password"):
+                    os.environ.setdefault("MQTT_PASS", str(creds["password"]))
+                print(f"[bridge-server] MQTT: broker from Supervisor = "
+                      f"{creds['host']}:{creds.get('port', 1883)}", flush=True)
+            else:
+                print("[bridge-server] MQTT enabled but no broker found: Supervisor "
+                      "/services/mqtt returned none. Add the MQTT integration / Mosquitto "
+                      "add-on, or set mqtt_host in the add-on options.", flush=True)
+
     # Option A -- credentials: fetch the whole DDS-Security bundle from the
     # Lennox cloud (login -> mint identity -> download docs) and auto-derive the
     # homeId/partition. Zero manual cert handling. Falls through to Option B on
@@ -254,18 +282,6 @@ def _materialize_bundle(src: str) -> str:
             print(f"[bridge-server] bundle materialize failed for {n}: {err}", flush=True)
     print(f"[bridge-server] materialized security bundle -> {runtime}", flush=True)
     return runtime
-    # Pull broker creds from the Supervisor `mqtt` service (services: mqtt:need).
-    if opts.get("mqtt_enabled"):
-        svc = _supervisor_request("GET", "/services/mqtt")
-        creds = (svc or {}).get("data", {})
-        if creds.get("host"):
-            os.environ.setdefault("MQTT_HOST", str(creds["host"]))
-            os.environ.setdefault("MQTT_PORT", str(creds.get("port", 1883)))
-            if creds.get("username"):
-                os.environ.setdefault("MQTT_USER", str(creds["username"]))
-            if creds.get("password"):
-                os.environ.setdefault("MQTT_PASS", str(creds["password"]))
-            print(f"[bridge-server] MQTT creds from Supervisor: {creds['host']}", flush=True)
 
 
 def _post_discovery(host: str, port: int) -> None:

@@ -15,7 +15,7 @@
 #      config at /config/lennox_dds/security/ (mapped read-only; see security_dir).
 # Nothing secret is baked into the image.
 name: Lennox iComfort DDS Bridge
-version: "0.1.3"
+version: "0.1.4"
 slug: lennox_dds
 description: OpenDDS sidecar bridging Lennox iComfort (M30 / prod4) realtime data to Home Assistant.
 url: https://github.com/challgren/lennox-dds
@@ -55,3 +55,9 @@ schema:
   security_dir: "str?"
   dcps_debug: int
   mqtt_enabled: bool
+  # Optional explicit broker; if blank + mqtt_enabled, the Supervisor mqtt
+  # service (Mosquitto) is used automatically.
+  mqtt_host: "str?"
+  mqtt_port: "int?"
+  mqtt_user: "str?"
+  mqtt_password: "password?"
