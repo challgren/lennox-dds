@@ -1,0 +1,36 @@
+# OpenDDS 3.22 base image — built ONCE, cached, reused by the app Dockerfile.
+# Pinned to the device's OpenDDS 3.22 / ACE 6.5.24 for XTypes wire compatibility.
+#
+#   docker build -f research/dds/docker/Dockerfile.base -t lennox-opendds-base:3.22 .
+#
+# Speed fixes vs the earlier 2-hour build:
+#   --optimize --no-debug  -> drops -ggdb debug symbols (the big slowdown + bloat)
+#   make -j                -> parallel
+# This is the only expensive build; the app image (Dockerfile) is FROM this and
+# compiles just our small subscriber in seconds.
+
+FROM debian:bookworm AS opendds
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      g++ make cmake perl git ca-certificates wget curl \
+      libssl-dev libxerces-c-dev python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV DDS_ROOT=/opt/OpenDDS
+# Which OpenDDS commit/tag to build. Default is the DDS-3.22 release tag; override
+# for version bisection, e.g. --build-arg OPENDDS_REF=98248232b (3.22.0-dev,
+# 2022-08-10, just before the XTypes name/enum/int-long changes that broke
+# TypeLookup interop with the device's 3.22.0-dev build).
+ARG OPENDDS_REF=DDS-3.22
+# blobless full clone so any commit can be checked out, then pin the ref.
+RUN git clone --filter=blob:none https://github.com/OpenDDS/OpenDDS.git "$DDS_ROOT"
+WORKDIR /opt/OpenDDS
+RUN git config --global --add safe.directory '*' \
+    && git checkout "$OPENDDS_REF" \
+    && grep OPENDDS_VERSION dds/Version.h | head -2
+# Release build (no debug symbols) + security. Much faster + far smaller than the
+# default debug build.
+RUN ./configure --optimize --no-debug --security \
+      --openssl=/usr --xerces3=/usr \
+    && make -j"$(nproc)" \
+    && ls bin/opendds_idl

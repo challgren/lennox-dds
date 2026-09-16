@@ -1,0 +1,22 @@
+# Patched OpenDDS base: apply the OCI skip_sequence_dheader interop fix on top of
+# the already-built base image and rebuild INCREMENTALLY (only patched files +
+# dependents recompile -- minutes, not the ~87min clean build).
+#
+#   docker build -f research/dds/docker/Dockerfile.patched -t lennox-opendds-base:322dev-patched .
+#
+# Then build the app image FROM it:
+#   docker build -f research/dds/docker/Dockerfile --build-arg BASE=lennox-opendds-base:322dev-patched -t lennox-dds:patched .
+
+ARG BASE=lennox-opendds-base:322dev
+FROM ${BASE}
+COPY patch/apply_patch.py /tmp/apply_patch.py
+# Part 1 patches a header-only template (Sequence<T> operator>>). make's
+# incremental dep-tracking only rebuilt Sedp.o, leaving TypeLookup.o / TypeObject.o
+# with the OLD template instantiation. Force-recompile every TU that instantiates
+# the sequence deserializer on the TypeLookup path so the patch actually lands.
+RUN python3 /tmp/apply_patch.py /opt/OpenDDS \
+    && find /opt/OpenDDS -name 'TypeLookup.o' -o -name 'TypeObject.o' -o -name 'Sedp.o' \
+         -o -name 'RtpsCoreTypeSupportImpl.o' -o -name 'RtpsRpcTypeSupportImpl.o' | xargs -r rm -f \
+    && cd /opt/OpenDDS && . ./setenv.sh \
+    && make -j"$(nproc)" \
+    && ls -la lib/libOpenDDS_Rtps.so* lib/libOpenDDS_Dcps.so*

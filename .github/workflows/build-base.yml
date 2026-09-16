@@ -1,0 +1,49 @@
+name: build-base
+
+# Rebuilds the heavy OpenDDS 3.22 base image (from source, ~1-2h) + applies the
+# XCDR2 skip_sequence_dheader interop patch, then pushes the patched base to GHCR.
+# Run this manually only when OpenDDS (OPENDDS_REF) or the patch changes; the fast
+# per-commit build-image.yml pulls this base as BASE.
+on:
+  workflow_dispatch:
+    inputs:
+      opendds_ref:
+        description: OpenDDS git ref to build (device is 3.22.0-dev)
+        default: "98248232b"
+
+env:
+  BASE_IMAGE: ghcr.io/challgren/lennox-opendds-base
+
+jobs:
+  base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build OpenDDS base from source (slow)
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg OPENDDS_REF=${{ github.event.inputs.opendds_ref }} \
+            -f container/Dockerfile.base \
+            -t opendds-base:amd64 container
+
+      - name: Apply interop patch (incremental)
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg BASE=opendds-base:amd64 \
+            -f container/Dockerfile.patched \
+            -t "${BASE_IMAGE}:322dev-amd64-patched" container
+
+      - name: Push patched base
+        run: docker push "${BASE_IMAGE}:322dev-amd64-patched"

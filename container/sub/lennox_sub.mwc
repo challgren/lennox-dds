@@ -1,0 +1,4 @@
+// MPC workspace wrapping the subscriber project (mwc.pl needs a workspace).
+workspace {
+  lennox_sub.mpc
+}

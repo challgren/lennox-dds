@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+"""Lennox iComfort DDS sidecar bridge server.
+
+Runs inside the add-on/container. Spawns the compiled OpenDDS bridge
+(`lennox_zone_status_sub --stream`), reads its newline-delimited JSON zoneStatus
+samples from stdout, and fans them out to:
+
+  * a local WebSocket (the HA integration connects here) -- always on
+  * MQTT with Home Assistant discovery -- optional, only if MQTT_HOST is set
+
+Keeping WebSocket + MQTT here (Python) keeps the C++ bridge tiny (DDS -> stdout).
+
+The C++ bridge does the DDS-Security handshake using the mounted bundle; this
+server does no DDS itself. Control (setpoint/mode) flows the other way: the HA
+integration sends a JSON `{"type":"command", ...}` frame over the WebSocket,
+which we translate to a `SET ...` line on the bridge's stdin (the bridge writes
+a scheduleUpdate). As an HA add-on we also load /data/options.json and post
+Supervisor discovery so the integration auto-wires this WebSocket.
+
+Env:
+  LENNOX_PARTITION   login homeId (required) -- the DDS partition
+  LENNOX_DOMAIN      DDS domain id (default 0)
+  LENNOX_TOPIC       topic name (default "LCC Zone Status")
+  LENNOX_SECURITY_DIR  security bundle dir (default /security)
+  LENNOX_CONFIG      OpenDDS ini (default /config/opendds_rtps.ini)
+  BRIDGE_BIN         path to the C++ bridge (default /app/lennox_zone_status_sub)
+  WS_HOST/WS_PORT    WebSocket bind (default 0.0.0.0:8099)
+  MQTT_HOST/MQTT_PORT/MQTT_USER/MQTT_PASS  optional MQTT (discovery under
+                     homeassistant/ + state topics under lennox_dds/<sysID>/<zoneId>)
+  DCPS_DEBUG         OpenDDS debug level (default 0)
+"""
+from __future__ import annotations
+
+import asyncio
+import calendar
+import json
+import os
+import re
+import signal
+import socket
+import time
+import urllib.request
+from contextlib import suppress
+
+# --------------------------------------------------------------------------- #
+# Home Assistant add-on integration (options + Supervisor discovery)
+#
+# When run as an HA add-on, Supervisor writes the user's options to
+# /data/options.json and exposes its API at http://supervisor with the token in
+# SUPERVISOR_TOKEN. We map options -> the env vars the rest of this server reads,
+# pull MQTT creds from the Supervisor `mqtt` service if enabled, and announce
+# ourselves via Supervisor discovery so the companion integration auto-wires the
+# WebSocket URL (no manual host/port typing). Outside an add-on these are no-ops.
+# --------------------------------------------------------------------------- #
+SUPERVISOR = "http://supervisor"
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+DISCOVERY_SERVICE = "lennox_dds"  # must equal the integration domain
+
+
+def _supervisor_request(method: str, path: str, body: dict | None = None) -> dict | None:
+    if not SUPERVISOR_TOKEN:
+        return None
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"{SUPERVISOR}{path}", data=data, method=method)
+    req.add_header("Authorization", f"Bearer {SUPERVISOR_TOKEN}")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 (trusted host)
+            return json.loads(resp.read() or b"{}")
+    except Exception as err:  # noqa: BLE001
+        print(f"[bridge-server] supervisor {method} {path} failed: {err}", flush=True)
+        return None
+
+
+def _load_addon_options() -> None:
+    """Map /data/options.json (+ Supervisor MQTT service) onto our env vars.
+
+    Env already set in the container wins (os.environ.setdefault), so a manual
+    `docker run -e ...` still overrides add-on options.
+    """
+    try:
+        with open("/data/options.json", encoding="utf-8") as fh:
+            opts = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return  # not running as an add-on
+    print("[bridge-server] loaded add-on options", flush=True)
+    if opts.get("topic"):
+        os.environ.setdefault("LENNOX_TOPIC", str(opts["topic"]))
+    os.environ.setdefault("LENNOX_DOMAIN", str(opts.get("domain", 0)))
+    os.environ.setdefault("DCPS_DEBUG", str(opts.get("dcps_debug", 0)))
+
+    # Option A -- credentials: fetch the whole DDS-Security bundle from the
+    # Lennox cloud (login -> mint identity -> download docs) and auto-derive the
+    # homeId/partition. Zero manual cert handling. Falls through to Option B on
+    # absence/failure.
+    provisioned = _provision_from_creds(opts)
+    if provisioned:
+        os.environ.setdefault("LENNOX_SECURITY_DIR", provisioned)
+    else:
+        # Option B -- user-supplied bundle in HA's /config (mapped read-only). The
+        # exact mount path of a `homeassistant_config` map varies by Supervisor
+        # version, so resolve it by searching candidates for the files.
+        if opts.get("home_id"):
+            os.environ.setdefault("LENNOX_PARTITION", str(opts["home_id"]))
+        src = _resolve_security_dir(str(opts.get("security_dir",
+                                                 "/homeassistant_config/lennox_dds/security")))
+        os.environ.setdefault("LENNOX_SECURITY_DIR", _materialize_bundle(src))
+
+
+def _bundle_complete(d: str) -> bool:
+    need = ("identity_ca.pem", "identity.pem", "identity.key", "permissions_ca.pem",
+            "governance.xml.p7s", "permissions.xml.p7s")
+    return all(os.path.isfile(os.path.join(d, f)) and os.path.getsize(os.path.join(d, f)) > 0
+               for f in need)
+
+
+def _cert_not_before(path: str) -> float | None:
+    """UTC epoch of a PEM cert's notBefore, via stdlib (no openssl/cryptography)."""
+    try:
+        import ssl
+        nb = ssl._ssl._test_decode_cert(path)["notBefore"]  # e.g. 'Sep 16 22:03:00 2026 GMT'
+        return calendar.timegm(time.strptime(nb, "%b %d %H:%M:%S %Y %Z"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def await_identity_valid() -> None:
+    """OpenDDS-Security validates our own identity cert's notBefore at participant
+    creation with zero skew tolerance. Freshly-minted Lennox certs start ~now, so
+    if the container clock lags the issuer the cert reads 'not yet valid' and the
+    bridge crash-loops. Log the skew and wait (bounded) until the cert is valid."""
+    secdir = os.environ.get("LENNOX_SECURITY_DIR")
+    if not secdir:
+        return
+    nb = _cert_not_before(os.path.join(secdir, "identity.pem"))
+    now = time.time()
+    print(f"[bridge-server] container UTC={int(now)} identity.notBefore="
+          f"{int(nb) if nb else None} (skew={int(nb - now) if nb else 'n/a'}s)", flush=True)
+    if nb and nb > now:
+        wait = min(int(nb - now) + 3, 900)
+        print(f"[bridge-server] identity cert not valid for {int(nb - now)}s "
+              f"(container clock behind issuer); waiting {wait}s before starting DDS. "
+              f"Fix the host/add-on clock (NTP) to avoid this.", flush=True)
+        time.sleep(wait)
+
+
+def _provision_from_creds(opts: dict) -> str | None:
+    """If lennox_email/lennox_password are set, fetch the DDS-Security bundle into
+    the add-on's persistent /data/security (cached across restarts) and set
+    LENNOX_PARTITION from the derived homeId. Returns the bundle dir or None."""
+    import subprocess
+    email, password = opts.get("lennox_email"), opts.get("lennox_password")
+    if not (email and password):
+        return None
+    cache = "/data/security"
+    os.makedirs(cache, exist_ok=True)
+    # Reuse the cache only if the identity cert is not in the future (a cached cert
+    # minted while the clock was skewed can read 'not yet valid' forever -> re-mint).
+    nb = _cert_not_before(os.path.join(cache, "identity.pem"))
+    cache_ok = _bundle_complete(cache) and (nb is None or nb <= time.time() + 60)
+    if cache_ok:
+        print("[bridge-server] using cached provisioned bundle (/data/security)", flush=True)
+    else:
+        if _bundle_complete(cache) and nb and nb > time.time() + 60:
+            print(f"[bridge-server] cached identity not-yet-valid ({int(nb - time.time())}s "
+                  "in the future); re-provisioning a fresh one", flush=True)
+            for f in os.listdir(cache):
+                with suppress(OSError):
+                    os.remove(os.path.join(cache, f))
+        print("[bridge-server] provisioning DDS-Security bundle from Lennox login...", flush=True)
+        env = {**os.environ, "LENNOX_EMAIL": str(email), "LENNOX_PASSWORD": str(password),
+               "LENNOX_BUNDLE_DIR": cache, "PYTHONPATH": "/app"}
+        try:
+            r = subprocess.run(["python3", "/app/fetch_security_docs.py"], env=env, cwd="/app",
+                               capture_output=True, text=True, timeout=180)
+            out = re.sub(r"(?i)bearer\s+[A-Za-z0-9._-]+", "Bearer <redacted>", r.stdout + r.stderr)
+            for line in out.strip().splitlines()[-25:]:
+                print("  [provision] " + line, flush=True)
+        except Exception as err:  # noqa: BLE001
+            print(f"[bridge-server] provisioning error: {err}", flush=True)
+    if not _bundle_complete(cache):
+        print("[bridge-server] provisioning did not yield a complete bundle; "
+              "falling back to a user-supplied bundle", flush=True)
+        return None
+    hp = os.path.join(cache, "home_id.txt")
+    if os.path.isfile(hp):
+        hid = open(hp, encoding="utf-8").read().strip()
+        if hid:
+            os.environ.setdefault("LENNOX_PARTITION", hid)
+            print(f"[bridge-server] auto homeId/partition = {hid}", flush=True)
+    return cache
+
+
+def _resolve_security_dir(configured: str) -> str:
+    """Find the dir that actually holds the DDS-Security bundle. A
+    `homeassistant_config` map may mount HA's /config at /homeassistant_config,
+    /homeassistant, or /config depending on Supervisor version, so try the
+    configured path first then the same 'lennox_dds/security' tail under each
+    known base. Logs each candidate's listing to aid diagnosis."""
+    tail = "lennox_dds/security"
+    candidates = [configured]
+    for base in ("/homeassistant_config", "/homeassistant", "/config", "/data"):
+        c = f"{base}/{tail}"
+        if c not in candidates:
+            candidates.append(c)
+    for c in candidates:
+        try:
+            names = sorted(os.listdir(c))
+        except OSError:
+            print(f"[bridge-server] security dir not present: {c}", flush=True)
+            continue
+        has_bundle = any(n.startswith(("identity_ca.pem", "identity.pem")) for n in names)
+        print(f"[bridge-server] security dir {c}: {names} "
+              f"({'has bundle' if has_bundle else 'no bundle'})", flush=True)
+        if has_bundle:
+            return c
+    print(f"[bridge-server] WARNING: no bundle dir found; using {configured}", flush=True)
+    return configured
+
+
+def _materialize_bundle(src: str) -> str:
+    """If the security dir holds base64 (.b64) files, decode them into a writable
+    runtime dir (alongside the plain files) and return that dir; else return src.
+
+    Rationale: the S/MIME governance/permissions docs are CRLF-signed, and some
+    provisioning channels (e.g. text-only file APIs) can't carry raw CR bytes.
+    Shipping those as <name>.b64 preserves them exactly; a .b64 twin overrides a
+    same-named plain file. The read-only bundle mount also means we must copy to
+    a writable location to present a clean dir to OpenDDS."""
+    import base64
+    try:
+        names = os.listdir(src)
+    except OSError:
+        return src
+    if not any(n.endswith(".b64") for n in names):
+        return src  # nothing to decode; use the dir as-is
+    b64set = {n for n in names if n.endswith(".b64")}
+    runtime = "/tmp/lennox_security"  # noqa: S108 (container-local, ephemeral)
+    os.makedirs(runtime, exist_ok=True)
+    for n in names:
+        sp = os.path.join(src, n)
+        if not os.path.isfile(sp):
+            continue
+        if not n.endswith(".b64") and (n + ".b64") in b64set:
+            continue  # the .b64 twin is authoritative
+        try:
+            with open(sp, "rb") as fh:
+                raw = fh.read()
+            data = base64.b64decode(raw) if n.endswith(".b64") else raw
+            with open(os.path.join(runtime, n[:-4] if n.endswith(".b64") else n), "wb") as out:
+                out.write(data)
+        except Exception as err:  # noqa: BLE001
+            print(f"[bridge-server] bundle materialize failed for {n}: {err}", flush=True)
+    print(f"[bridge-server] materialized security bundle -> {runtime}", flush=True)
+    return runtime
+    # Pull broker creds from the Supervisor `mqtt` service (services: mqtt:need).
+    if opts.get("mqtt_enabled"):
+        svc = _supervisor_request("GET", "/services/mqtt")
+        creds = (svc or {}).get("data", {})
+        if creds.get("host"):
+            os.environ.setdefault("MQTT_HOST", str(creds["host"]))
+            os.environ.setdefault("MQTT_PORT", str(creds.get("port", 1883)))
+            if creds.get("username"):
+                os.environ.setdefault("MQTT_USER", str(creds["username"]))
+            if creds.get("password"):
+                os.environ.setdefault("MQTT_PASS", str(creds["password"]))
+            print(f"[bridge-server] MQTT creds from Supervisor: {creds['host']}", flush=True)
+
+
+def _post_discovery(host: str, port: int) -> None:
+    """Announce this add-on to HA via Supervisor discovery so the companion
+    integration's async_step_hassio fires with our WebSocket host/port."""
+    resp = _supervisor_request(
+        "POST", "/discovery",
+        {"service": DISCOVERY_SERVICE, "config": {"host": host, "port": port}},
+    )
+    if resp is not None:
+        print(f"[bridge-server] posted discovery ({host}:{port})", flush=True)
+
+
+_load_addon_options()
+
+BRIDGE_BIN = os.environ.get("BRIDGE_BIN", "/app/lennox_zone_status_sub")
+INI = os.environ.get("LENNOX_CONFIG", "/config/opendds_rtps.ini")
+SEC_DIR = os.environ.get("LENNOX_SECURITY_DIR", "/security")
+DOMAIN = os.environ.get("LENNOX_DOMAIN", "0")
+TOPIC = os.environ.get("LENNOX_TOPIC", "LCC Zone Status")
+PARTITION = os.environ.get("LENNOX_PARTITION", "")
+DCPS_DEBUG = os.environ.get("DCPS_DEBUG", "0")
+WS_HOST = os.environ.get("WS_HOST", "0.0.0.0")
+WS_PORT = int(os.environ.get("WS_PORT", "8099"))
+MQTT_HOST = os.environ.get("MQTT_HOST")
+
+# latest sample per (sysID, zoneId); newly-connected WS clients get a snapshot.
+_latest: dict[str, dict] = {}
+_ws_clients: set = set()
+_mqtt = None  # set if MQTT enabled
+_discovery_sent: set = set()
+_bridge_proc = None  # current asyncio subprocess (for writing control commands)
+
+# HA maps a zone to a schedule override slot: override scheduleId = 32 + zoneId
+# (proven live in Phase 6; manual = 16 + zoneId). Control writes target override.
+SCHEDULE_OVERRIDE_BASE = 32
+
+
+def _build_set_line(cmd: dict) -> str | None:
+    """Translate a control command dict into a bridge stdin line:
+        SET <sysID> <scheduleId> [mode=<int>] [csp=<F>] [hsp=<F>] [sp=<F>]
+    Returns None if the command has no sysID or no writable field."""
+    sys_id = cmd.get("sysID")
+    if not sys_id:
+        return None
+    schedule_id = SCHEDULE_OVERRIDE_BASE + int(cmd.get("zoneId", 0))
+    parts = ["SET", str(sys_id), str(schedule_id)]
+    for field in ("mode", "fan"):  # integer enum fields
+        if cmd.get(field) is not None:
+            parts.append(f"{field}={int(cmd[field])}")
+    for field in ("csp", "hsp", "sp"):  # float setpoints (Fahrenheit)
+        if cmd.get(field) is not None:
+            parts.append(f"{field}={float(cmd[field])}")
+    return " ".join(parts) if len(parts) > 3 else None
+
+
+async def _send_command(cmd: dict) -> None:
+    """Write one control line to the DDS bridge's stdin."""
+    line = _build_set_line(cmd)
+    if line is None:
+        print(f"[bridge-server] ignoring control cmd (no target/field): {cmd}", flush=True)
+        return
+    proc = _bridge_proc
+    if proc is None or proc.stdin is None or proc.returncode is not None:
+        print("[bridge-server] control cmd dropped: bridge not running", flush=True)
+        return
+    print(f"[bridge-server] control -> bridge: {line}", flush=True)
+    proc.stdin.write((line + "\n").encode())
+    with suppress(Exception):
+        await proc.stdin.drain()
+
+
+# --------------------------------------------------------------------------- #
+# WebSocket fan-out (uses the `websockets` library)
+# --------------------------------------------------------------------------- #
+async def _ws_handler(ws):
+    _ws_clients.add(ws)
+    try:
+        # snapshot current state to the new client
+        for sample in _latest.values():
+            await ws.send(json.dumps(sample))
+        # inbound = control commands from the HA integration
+        async for raw in ws:
+            try:
+                cmd = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(cmd, dict) and cmd.get("type") == "command":
+                await _send_command(cmd)
+    finally:
+        _ws_clients.discard(ws)
+
+
+async def _ws_broadcast(sample: dict) -> None:
+    if not _ws_clients:
+        return
+    msg = json.dumps(sample)
+    dead = []
+    for ws in _ws_clients:
+        try:
+            await ws.send(msg)
+        except Exception:  # noqa: BLE001
+            dead.append(ws)
+    for ws in dead:
+        _ws_clients.discard(ws)
+
+
+# --------------------------------------------------------------------------- #
+# Optional MQTT publish with Home Assistant discovery
+# --------------------------------------------------------------------------- #
+async def _mqtt_connect():
+    global _mqtt
+    try:
+        import aiomqtt  # type: ignore
+    except ImportError:
+        print("[bridge-server] MQTT_HOST set but aiomqtt not installed; skipping MQTT",
+              flush=True)
+        return None
+    client = aiomqtt.Client(
+        hostname=MQTT_HOST,
+        port=int(os.environ.get("MQTT_PORT", "1883")),
+        username=os.environ.get("MQTT_USER"),
+        password=os.environ.get("MQTT_PASS"),
+    )
+    await client.__aenter__()
+    _mqtt = client
+    print(f"[bridge-server] MQTT connected to {MQTT_HOST}", flush=True)
+    return client
+
+
+async def _mqtt_publish(sample: dict) -> None:
+    if _mqtt is None:
+        return
+    sys_id = str(sample.get("sysID", "sys"))
+    zone = str(sample.get("zoneId", "0"))
+    base = f"lennox_dds/{sys_id}/{zone}"
+    key = base
+    # one-time HA MQTT discovery for a climate + temp/humidity sensors
+    if key not in _discovery_sent:
+        uid = f"lennox_dds_{sys_id}_{zone}"
+        disc = {
+            "name": f"Lennox iComfort zone {zone}",
+            "unique_id": uid,
+            "current_temperature_topic": f"{base}/state",
+            "current_temperature_template": "{{ value_json.temperature }}",
+            "temperature_state_topic": f"{base}/state",
+            "temperature_state_template": "{{ value_json.period.csp }}",
+            "current_humidity_topic": f"{base}/state",
+            "current_humidity_template": "{{ value_json.humidity }}",
+            "modes": ["off", "heat", "cool", "heat_cool"],
+            "device": {"identifiers": [f"lennox_dds_{sys_id}"], "name": f"Lennox iComfort {sys_id}",
+                       "manufacturer": "Lennox", "model": "iComfort"},
+        }
+        with suppress(Exception):
+            await _mqtt.publish(f"homeassistant/climate/{uid}/config",
+                                json.dumps(disc), retain=True)
+        _discovery_sent.add(key)
+    with suppress(Exception):
+        await _mqtt.publish(f"{base}/state", json.dumps(sample), retain=True)
+
+
+# --------------------------------------------------------------------------- #
+# DDS bridge subprocess
+# --------------------------------------------------------------------------- #
+async def _run_bridge() -> None:
+    argv = [
+        BRIDGE_BIN, "-DCPSConfigFile", INI,
+        "--domain", DOMAIN, "--topic", TOPIC, "--partition", PARTITION,
+        "--security-dir", SEC_DIR, "--stream", "-DCPSDebugLevel", DCPS_DEBUG,
+    ]
+    global _bridge_proc
+    while True:
+        print(f"[bridge-server] launching DDS bridge: {' '.join(argv)}", flush=True)
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdin=asyncio.subprocess.PIPE,   # control commands go here
+            stdout=asyncio.subprocess.PIPE, stderr=None)  # stderr -> our stderr
+        _bridge_proc = proc
+        assert proc.stdout
+        async for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                sample = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # stray non-JSON line
+            _latest[f"{sample.get('sysID')}:{sample.get('zoneId')}"] = sample
+            await _ws_broadcast(sample)
+            await _mqtt_publish(sample)
+        rc = await proc.wait()
+        _bridge_proc = None
+        print(f"[bridge-server] DDS bridge exited rc={rc}; restarting in 5s", flush=True)
+        await asyncio.sleep(5)  # reconnect/backoff
+
+
+async def main() -> None:
+    if not PARTITION:
+        raise SystemExit("LENNOX_PARTITION (login homeId) is required")
+    import websockets  # type: ignore
+
+    if MQTT_HOST:
+        await _mqtt_connect()
+
+    async with websockets.serve(_ws_handler, WS_HOST, WS_PORT):
+        print(f"[bridge-server] WebSocket on ws://{WS_HOST}:{WS_PORT}", flush=True)
+        # Announce ourselves to HA so the companion integration auto-configures.
+        # Advertise our container hostname (resolvable by core on the Supervisor
+        # network), not the 0.0.0.0 bind address.
+        _post_discovery(socket.gethostname(), WS_PORT)
+        await _run_bridge()
+
+
+if __name__ == "__main__":
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with suppress(NotImplementedError):
+            loop.add_signal_handler(sig, loop.stop)
+    await_identity_valid()  # block until our identity cert's notBefore has passed
+    with suppress(KeyboardInterrupt):
+        loop.run_until_complete(main())

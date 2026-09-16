@@ -1,0 +1,36 @@
+// MPC project for the Lennox zoneStatus secure subscriber (Backend A).
+// Build via build.sh (which runs mwc.pl -type gnuace + make) after sourcing
+// $DDS_ROOT/setenv.sh. Requires OpenDDS built with --security.
+//
+// dcps_security pulls the DDS-Security plugin libs; dcps_rtps_udp the RTPS
+// transport. idlflags -I points opendds_idl/tao_idl at the recovered model so
+// #include "lennox_m30.idl" resolves.
+
+// lennox_m30.idl is copied into this dir by build.sh so its generated C++
+// (lennox_m30C.h + marshaling) lands here; zone_status_topic.idl includes it and
+// adds the DDS TypeSupport for the zoneStatus topic type.
+
+project(*idl): dcps {
+  // -Gxtypes-complete: emit COMPLETE TypeObjects so remote type matching happens
+  // locally (avoids the runtime XTypes TypeLookup round-trip that fails against
+  // the device's pkg-21 build).
+  dcps_ts_flags += -Gxtypes-complete
+  TypeSupport_Files {
+    lennox_m30.idl
+  }
+  custom_only = 1
+}
+
+project(*sub): dcpsexe, dcps_rtps_udp, opendds_security {
+  after       += *idl
+  exename      = lennox_zone_status_sub
+  includes    += .
+  libpaths    += .
+
+  TypeSupport_Files {
+    lennox_m30.idl
+  }
+  Source_Files {
+    lennox_zone_status_sub.cpp
+  }
+}
