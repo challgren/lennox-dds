@@ -11,7 +11,7 @@ discovery.
 ## Install
 
 1. Settings → Add-ons → Add-on Store → ⋮ → **Repositories** → add
-   `https://github.com/challgren/lennox-dds-addon`
+   `https://github.com/challgren/lennox-dds`
 2. Install **Lennox iComfort DDS Bridge**.
 3. Drop your DDS-Security bundle into `/config/lennox_dds/security/` (6 files:
    `identity_ca.pem`, `identity.pem`, `identity.key`, `permissions_ca.pem`,
