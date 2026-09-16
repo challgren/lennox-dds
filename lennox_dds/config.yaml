@@ -12,7 +12,7 @@
 # /config/lennox_dds/security/, which is mapped read-only into the add-on at
 # /homeassistant_config/lennox_dds/security (see `security_dir`).
 name: Lennox iComfort DDS Bridge
-version: "0.1.0"
+version: "0.1.1"
 slug: lennox_dds
 description: OpenDDS sidecar bridging Lennox iComfort (M30 / prod4) realtime data to Home Assistant.
 url: https://github.com/challgren/lennox-dds
