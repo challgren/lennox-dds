@@ -1,0 +1,50 @@
+# Home Assistant add-on manifest for the Lennox iComfort DDS bridge.
+#
+# Prebuilt-image add-on (no on-server build): Supervisor pulls
+#   {image}:{version} = ghcr.io/challgren/lennox-dds:0.1.0
+# The image is the OpenDDS 3.22 sidecar (research/dds/docker). It does the
+# DDS-Security handshake + RtpsRelay traversal and streams zoneStatus over a
+# local WebSocket (port 8099, internal to the Supervisor network); the companion
+# `lennox_dds` integration connects to it, auto-wired by Supervisor discovery.
+#
+# The security bundle is NOT baked into the image (it holds a private key). The
+# user drops the 6 DDS-Security files into HA's config at
+# /config/lennox_dds/security/, which is mapped read-only into the add-on at
+# /homeassistant_config/lennox_dds/security (see `security_dir`).
+name: Lennox iComfort DDS Bridge
+version: "0.1.0"
+slug: lennox_dds
+description: OpenDDS sidecar bridging Lennox iComfort (M30 / prod4) realtime data to Home Assistant.
+url: https://github.com/challgren/lennox-dds-addon
+image: ghcr.io/challgren/lennox-dds
+arch:
+  - amd64
+init: false
+# Reach the Supervisor for the discovery message + optional MQTT service creds.
+hassio_api: true
+hassio_role: default
+# Advertise this add-on to the companion integration via Supervisor discovery.
+discovery:
+  - lennox_dds
+# Optional: auto-pull MQTT broker creds if the user runs the Mosquitto add-on.
+services:
+  - mqtt:want
+# Mount HA's /config read-only so the add-on can read the security bundle the
+# user placed at /config/lennox_dds/security/ (appears at /homeassistant_config/...).
+map:
+  - type: homeassistant_config
+    read_only: true
+options:
+  home_id: ""
+  domain: 0
+  topic: "LCC Zone Status"
+  security_dir: "/homeassistant_config/lennox_dds/security"
+  dcps_debug: 0
+  mqtt_enabled: false
+schema:
+  home_id: str          # login homeId = the DDS partition (e.g. "5212374")
+  domain: int
+  topic: str
+  security_dir: str
+  dcps_debug: int
+  mqtt_enabled: bool
