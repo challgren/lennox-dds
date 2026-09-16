@@ -38,12 +38,13 @@ RUN mkdir -p /opt/dds-libs \
 
 # --- runtime image ---
 FROM debian:bookworm-slim AS runtime
+# Pinned Python deps (Dependabot-tracked); see container/requirements.txt.
+COPY requirements.txt /tmp/requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libssl3 libxerces-c3.2 python3 python3-pip \
-    && pip3 install --no-cache-dir --break-system-packages \
-         websockets aiomqtt lennoxs30api \
+    && pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt \
     && apt-get purge -y python3-pip && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/requirements.txt
 ENV DDS_ROOT=/opt/OpenDDS
 # OpenDDS + ACE/TAO shared libs (dereferenced into one dir in the build stage).
 COPY --from=build /opt/dds-libs /opt/dds-libs

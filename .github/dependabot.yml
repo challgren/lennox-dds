@@ -27,3 +27,16 @@ updates:
     labels: ["dependencies", "docker"]
     commit-message:
       prefix: "docker"
+
+  # Pinned runtime Python deps (container/requirements.txt).
+  - package-ecosystem: pip
+    directory: "/container"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "pip"

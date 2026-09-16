@@ -1,0 +1,5 @@
+# Runtime Python deps for the bridge server + credentialed provisioning.
+# Pinned so builds are reproducible and Dependabot (pip ecosystem) tracks them.
+websockets==17.1      # WebSocket fan-out to the HA integration
+aiomqtt==2.5.1        # optional MQTT discovery publisher
+lennoxs30api==0.2.24  # Lennox cloud auth/login (pulls aiohttp) for bundle fetch
