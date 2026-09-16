@@ -7,12 +7,15 @@
 # local WebSocket (port 8099, internal to the Supervisor network); the companion
 # `lennox_dds` integration connects to it, auto-wired by Supervisor discovery.
 #
-# The security bundle is NOT baked into the image (it holds a private key). The
-# user drops the 6 DDS-Security files into HA's config at
-# /config/lennox_dds/security/, which is mapped read-only into the add-on at
-# /homeassistant_config/lennox_dds/security (see `security_dir`).
+# Two ways to supply DDS-Security credentials:
+#   A) lennox_email + lennox_password -> the add-on logs in to the Lennox cloud,
+#      mints its own participant identity, downloads the full bundle, caches it in
+#      /data, and auto-derives home_id. Zero manual cert handling. (Recommended.)
+#   B) leave the credentials blank and drop the 6 DDS-Security files into HA's
+#      config at /config/lennox_dds/security/ (mapped read-only; see security_dir).
+# Nothing secret is baked into the image.
 name: Lennox iComfort DDS Bridge
-version: "0.1.1"
+version: "0.1.2"
 slug: lennox_dds
 description: OpenDDS sidecar bridging Lennox iComfort (M30 / prod4) realtime data to Home Assistant.
 url: https://github.com/challgren/lennox-dds
@@ -35,6 +38,8 @@ map:
   - type: homeassistant_config
     read_only: true
 options:
+  lennox_email: ""
+  lennox_password: ""
   home_id: ""
   domain: 0
   topic: "LCC Zone Status"
@@ -42,9 +47,11 @@ options:
   dcps_debug: 0
   mqtt_enabled: false
 schema:
-  home_id: str          # login homeId = the DDS partition (e.g. "5212374")
+  lennox_email: "str?"        # Option A: Lennox account email (auto-provision)
+  lennox_password: "password?" # Option A: Lennox account password
+  home_id: "str?"             # Option B only: login homeId = DDS partition; auto with creds
   domain: int
   topic: str
-  security_dir: str
+  security_dir: "str?"
   dcps_debug: int
   mqtt_enabled: bool
