@@ -146,6 +146,11 @@ struct AwayWriter {
   Publisher_var pub;
   DataWriter_var writer;
   MA::manualAwayUpdateDataWriter_var aw;
+  // Debug (LENNOX_DEBUG_AWAY): a read-only reader on the SAME "Owner Manual Away"
+  // topic, to discover whether the device publishes its away STATE back here.
+  Subscriber_var sub_r;
+  DataReader_var reader_r;
+  MA::manualAwayUpdateDataReader_var ar;
 
   bool init(DomainParticipant_var& dp, const std::string& partition) {
     using namespace DDS;
@@ -166,7 +171,43 @@ struct AwayWriter {
     writer = pub->create_datawriter(topic, dw_qos, 0, 0);
     if (!writer) { std::cerr << "create_datawriter(away) failed\n"; return false; }
     aw = MA::manualAwayUpdateDataWriter::_narrow(writer);
+    if (::getenv("LENNOX_DEBUG_AWAY")) init_echo_reader(dp, partition);
     return !!aw;
+  }
+
+  // Read-only listener on the away topic (debug). If the device echoes its away
+  // state here, poll_echo() logs it and we learn the read-back path.
+  void init_echo_reader(DomainParticipant_var& dp, const std::string& partition) {
+    using namespace DDS;
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!partition.empty()) { sq.partition.name.length(1); sq.partition.name[0] = partition.c_str(); }
+    sub_r = dp->create_subscriber(sq, 0, 0);
+    if (!sub_r) { std::cerr << "[debug-away] create_subscriber failed\n"; return; }
+    DataReaderQos dr; sub_r->get_default_datareader_qos(dr);
+    dr.reliability.kind = RELIABLE_RELIABILITY_QOS;
+    dr.durability.kind  = TRANSIENT_LOCAL_DURABILITY_QOS;
+    dr.representation.value.length(1);
+    dr.representation.value[0] = XCDR2_DATA_REPRESENTATION;
+    dr.type_consistency.kind = ALLOW_TYPE_COERCION;
+    dr.type_consistency.ignore_member_names = true;
+    dr.type_consistency.prevent_type_widening = false;
+    dr.type_consistency.force_type_validation = false;
+    reader_r = sub_r->create_datareader(topic, dr, 0, 0);
+    if (!reader_r) { std::cerr << "[debug-away] create_datareader failed\n"; return; }
+    ar = MA::manualAwayUpdateDataReader::_narrow(reader_r);
+    std::cerr << "[debug-away] echo reader up on 'Owner Manual Away'\n";
+  }
+
+  void poll_echo() {
+    if (!ar) return;
+    MA::manualAwayUpdateSeq d; DDS::SampleInfoSeq inf;
+    if (ar->take(d, inf, DDS::LENGTH_UNLIMITED, DDS::ANY_SAMPLE_STATE,
+                 DDS::ANY_VIEW_STATE, DDS::ANY_INSTANCE_STATE) != DDS::RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i)
+      if (inf[i].valid_data)
+        std::cerr << "[debug-away] RX manualAwayUpdate sysID=" << d[i].sysID
+                  << " setAway=" << (d[i].setAway ? "true" : "false")
+                  << " validFlag=" << d[i].validFlag << "\n";
   }
 
   bool write_away(const std::string& sys_id, bool set_away) {
@@ -433,6 +474,7 @@ int main(int argc, char** argv) {
       ConditionSeq active;
       ws->wait(active, poll);      // RETCODE_TIMEOUT when idle -- fine, just re-loop
       take_and_print();
+      away.poll_echo();            // debug (LENNOX_DEBUG_AWAY): log device away echo
     }
     std::cerr << "[bridge] shutting down\n";
     rc_exit = 0;

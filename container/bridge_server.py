@@ -89,6 +89,12 @@ def _load_addon_options() -> None:
         os.environ.setdefault("LENNOX_TOPIC", str(opts["topic"]))
     os.environ.setdefault("LENNOX_DOMAIN", str(opts.get("domain", 0)))
     os.environ.setdefault("DCPS_DEBUG", str(opts.get("dcps_debug", 0)))
+    # Debug: log each raw sample + subscribe to the away topic to discover how the
+    # device reports away state back. One switch drives both.
+    if opts.get("debug_away"):
+        os.environ.setdefault("LENNOX_RAW_DUMP", "1")
+        os.environ.setdefault("LENNOX_DEBUG_AWAY", "1")
+        print("[bridge-server] debug_away ON: raw dump + away echo reader", flush=True)
 
     # MQTT (optional): publish state + accept control. Broker comes from an
     # explicit mqtt_host option, else the Supervisor `mqtt` service (Mosquitto).
@@ -311,6 +317,7 @@ WS_HOST = os.environ.get("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.environ.get("WS_PORT", "8099"))
 MQTT_HOST = os.environ.get("MQTT_HOST")
 MQTT_DISCOVERY = os.environ.get("MQTT_DISCOVERY", "0") == "1"  # publish an HA entity?
+RAW_DUMP = os.environ.get("LENNOX_RAW_DUMP", "0") == "1"  # debug: log each raw sample
 
 # latest sample per (sysID, zoneId); newly-connected WS clients get a snapshot.
 _latest: dict[str, dict] = {}
@@ -574,6 +581,8 @@ async def _run_bridge() -> None:
                 sample = json.loads(line)
             except json.JSONDecodeError:
                 continue  # stray non-JSON line
+            if RAW_DUMP:
+                print(f"[raw] {line.decode('utf-8', 'replace')}", flush=True)
             _latest[f"{sample.get('sysID')}:{sample.get('zoneId')}"] = sample
             await _ws_broadcast(sample)
             await _mqtt_publish(sample)

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.10
+
+- **Away switch disabled by default (experimental).** The away *write* works, but
+  the M30 doesn't echo manual-away in `period.away`, so the switch couldn't show
+  true state and could silently leave the system in Away. It's now off by default
+  until the state-readback path is found; enable it manually if you want to test.
+- **`debug_away` option** (default `false`): logs each raw sample and subscribes
+  read-only to the `Owner Manual Away` topic, to discover how the thermostat
+  reports away state back. Turn on only for diagnostics — it's noisy.
+
 ## 0.1.9
 
 - **Away control**: Manual Away is now writable, not just visible. The bridge

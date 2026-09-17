@@ -41,6 +41,10 @@ class M30AwaySwitch(CoordinatorEntity[M30BridgeCoordinator], SwitchEntity):
     _attr_has_entity_name = True
     _attr_name = "Away"
     _attr_icon = "mdi:home-export-outline"
+    # Experimental: the away WRITE works, but the M30 doesn't echo manual-away in
+    # period.away, so is_on can't reflect true state yet (readback RE pending).
+    # Disabled by default so it can't silently engage away until that's solved.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: M30BridgeCoordinator, sys_id: str) -> None:
         super().__init__(coordinator)

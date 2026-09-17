@@ -15,7 +15,7 @@
 #      config at /config/lennox_dds/security/ (mapped read-only; see security_dir).
 # Nothing secret is baked into the image.
 name: Lennox iComfort DDS Bridge
-version: "0.1.9"
+version: "0.1.10"
 slug: lennox_dds
 description: OpenDDS sidecar bridging Lennox iComfort (M30 / prod4) realtime data to Home Assistant.
 url: https://github.com/challgren/lennox-dds
@@ -45,6 +45,7 @@ options:
   topic: "LCC Zone Status"
   security_dir: "/homeassistant_config/lennox_dds/security"
   dcps_debug: 0
+  debug_away: false
   mqtt_enabled: false
   mqtt_discovery: false
 schema:
@@ -55,6 +56,7 @@ schema:
   topic: str
   security_dir: "str?"
   dcps_debug: int
+  debug_away: bool           # log raw samples + subscribe to away topic (diagnostic)
   mqtt_enabled: bool
   mqtt_discovery: bool        # true = also expose an HA MQTT climate entity
   # Optional explicit broker; if blank + mqtt_enabled, the Supervisor mqtt
