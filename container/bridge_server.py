@@ -32,7 +32,9 @@ Env:
 from __future__ import annotations
 
 import asyncio
+import builtins
 import calendar
+import datetime
 import json
 import os
 import re
@@ -41,6 +43,14 @@ import socket
 import time
 import urllib.request
 from contextlib import suppress
+
+
+def _ts() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def print(*args, **kwargs):  # noqa: A001 - deliberately timestamp every log line
+    builtins.print(f"[{_ts()}]", *args, **kwargs)
 
 # --------------------------------------------------------------------------- #
 # Home Assistant add-on integration (options + Supervisor discovery)
@@ -572,9 +582,13 @@ async def _run_bridge() -> None:
         print(f"[bridge-server] launching DDS bridge: {' '.join(argv)}", flush=True)
         proc = await asyncio.create_subprocess_exec(
             *argv, stdin=asyncio.subprocess.PIPE,   # control commands go here
-            stdout=asyncio.subprocess.PIPE, stderr=None)  # stderr -> our stderr
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE)         # forwarded with timestamps
         _bridge_proc = proc
-        assert proc.stdout
+        assert proc.stdout and proc.stderr
+        # forward the C++ bridge's stderr ([cmd]/[bridge]/[debug-*]/OpenDDS) so
+        # every line is timestamped like the rest of our log.
+        stderr_task = asyncio.create_task(_forward_stderr(proc.stderr))
         async for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -590,8 +604,19 @@ async def _run_bridge() -> None:
             await _mqtt_publish(sample)
         rc = await proc.wait()
         _bridge_proc = None
+        stderr_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await stderr_task
         print(f"[bridge-server] DDS bridge exited rc={rc}; restarting in 5s", flush=True)
         await asyncio.sleep(5)  # reconnect/backoff
+
+
+async def _forward_stderr(stream: asyncio.StreamReader) -> None:
+    """Re-emit the C++ bridge's stderr through our timestamped print()."""
+    async for raw in stream:
+        text = raw.rstrip(b"\n").decode("utf-8", "replace")
+        if text:
+            print(text, flush=True)
 
 
 async def main() -> None:

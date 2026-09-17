@@ -44,6 +44,13 @@ namespace SU = LxScheduleUpdateIDL;
 namespace SC = LxSchedulesIDL;
 namespace PD = Lx_PeriodIDL;
 namespace MA = LxManualAwayUpdateIDL;
+namespace MAS = LxManualAwayStatusIDL;
+
+// Latest manual-away STATE per sysID, from the "LCC Manual Away Status" topic.
+// Merged into every zoneStatus sample as "manualAway" so the integration's Away
+// switch can reflect true state. -1 = unknown, 0 = home, 1 = away.
+#include <map>
+static std::map<std::string, int> g_away_status;
 
 // Period validFlag bits (research/idl/lennox_m30.idl :: Lx_PeriodIDL).
 static const unsigned PERIOD_VALID_SYSTEMMODE = 8;
@@ -329,6 +336,52 @@ static void dump_publications(DomainParticipant_ptr dp, std::set<std::string>& s
   }
 }
 
+// Reader on "LCC Manual Away Status" -> keeps g_away_status[sysID] current, so
+// the away STATE (which zoneStatus doesn't carry) reaches the integration.
+struct AwayStatusReader {
+  Subscriber_var sub;
+  DataReader_var reader;
+  MAS::manualAwayStatusDataReader_var ar;
+
+  bool init(DomainParticipant_var& dp, const std::string& partition) {
+    MAS::manualAwayStatusTypeSupport_var ts = new MAS::manualAwayStatusTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg manualAwayStatus failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var topic = dp->create_topic("LCC Manual Away Status", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!topic) { std::cerr << "create_topic(LCC Manual Away Status) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!partition.empty()) { sq.partition.name.length(1); sq.partition.name[0] = partition.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0);
+    if (!sub) { std::cerr << "create_subscriber(away-status) failed\n"; return false; }
+    DataReaderQos dr; sub->get_default_datareader_qos(dr);
+    dr.reliability.kind = RELIABLE_RELIABILITY_QOS;
+    dr.durability.kind  = TRANSIENT_LOCAL_DURABILITY_QOS;  // want last state on join
+    dr.representation.value.length(1);
+    dr.representation.value[0] = XCDR2_DATA_REPRESENTATION;
+    dr.type_consistency.kind = ALLOW_TYPE_COERCION;
+    dr.type_consistency.ignore_member_names = true;
+    dr.type_consistency.prevent_type_widening = false;
+    dr.type_consistency.force_type_validation = false;
+    reader = sub->create_datareader(topic, dr, 0, 0);
+    if (!reader) { std::cerr << "create_datareader(away-status) failed\n"; return false; }
+    ar = MAS::manualAwayStatusDataReader::_narrow(reader);
+    return !!ar;
+  }
+
+  void poll() {
+    if (!ar) return;
+    MAS::manualAwayStatusSeq d; SampleInfoSeq inf;
+    if (ar->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE,
+                 ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i)
+      if (inf[i].valid_data) {
+        g_away_status[std::string(d[i].sysID)] = d[i].awayStatus ? 1 : 0;
+        std::cerr << "[away-status] sysID=" << d[i].sysID
+                  << " awayStatus=" << (d[i].awayStatus ? "true" : "false") << "\n";
+      }
+  }
+};
+
 static void print_sample_json(const ZS::zoneStatus& z) {
   std::ostringstream o;
   o << "{";
@@ -374,6 +427,13 @@ static void print_sample_json(const ZS::zoneStatus& z) {
       << ",\"scheduleId\":" << z.scheduleExceptionIds[i].scheduleId << "}";
   }
   o << "]";
+  // true manual-away STATE from the "LCC Manual Away Status" topic (per sysID).
+  // null when we haven't received a status sample yet.
+  {
+    auto it = g_away_status.find(std::string(z.sysID));
+    if (it == g_away_status.end() || it->second < 0) o << ",\"manualAway\":null";
+    else o << ",\"manualAway\":" << (it->second ? "true" : "false");
+  }
   o << "}";
   std::cout << o.str() << std::endl;
 }
@@ -492,8 +552,11 @@ int main(int argc, char** argv) {
     // scheduleUpdate. Kept in a detached thread so the sample loop is unblocked.
     static ScheduleWriter sched;
     static AwayWriter away;
+    static AwayStatusReader away_status;
     const bool have_writer = sched.init(dp, partition);
     away.init(dp, partition);   // best-effort; away control is optional
+    if (away_status.init(dp, partition))  // true away-state readback
+      std::cerr << "[bridge] away-status reader up on 'LCC Manual Away Status'\n";
     if (!have_writer) std::cerr << "[bridge] control writer init failed; reads-only\n";
     std::thread cmd_thread;
     if (have_writer) {
@@ -511,6 +574,7 @@ int main(int argc, char** argv) {
     while (g_running) {
       ConditionSeq active;
       ws->wait(active, poll);      // RETCODE_TIMEOUT when idle -- fine, just re-loop
+      away_status.poll();          // refresh true away state before printing
       take_and_print();
       away.poll_echo();            // debug (LENNOX_DEBUG_AWAY): log device away echo
       if (debug_topics) dump_publications(dp, seen_pubs);  // enumerate device topics

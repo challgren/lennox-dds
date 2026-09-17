@@ -15,6 +15,7 @@ cat >> ./lennox_m30.idl <<'IDL'
 #pragma DCPS_DATA_TYPE "LxZoneStatusIDL::zoneStatus"
 #pragma DCPS_DATA_TYPE "LxScheduleUpdateIDL::scheduleUpdate"
 #pragma DCPS_DATA_TYPE "LxManualAwayUpdateIDL::manualAwayUpdate"
+#pragma DCPS_DATA_TYPE "LxManualAwayStatusIDL::manualAwayStatus"
 IDL
 
 "$ACE_ROOT/bin/mwc.pl" -type gnuace lennox_sub.mwc

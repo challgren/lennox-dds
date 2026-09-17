@@ -268,6 +268,23 @@ module LxManualAwayUpdateIDL {
     };
 };
 
+// -----------------------------------------------------------------------------
+// Manual Away STATE -- the device publishes this on topic "LCC Manual Away
+// Status" (TOPIC_MANUAL_AWAY_STATUS). This is the readback for the switch;
+// zoneStatus.period.away is NOT it. Field order from the decompiled app's
+// manualAwayStatus(sysID, awayStatus, validFlag) ctor.
+// -----------------------------------------------------------------------------
+module LxManualAwayStatusIDL {
+    const unsigned long ManualAwayStatus_Valid_Status = 1;
+
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct manualAwayStatus {
+        @key string             sysID;       // wire pos 0 (KEY)
+        boolean                 awayStatus;  //          1
+        unsigned long           validFlag;   //          2
+    };
+};
+
 // ---------------------------------------------------------------------------
 // LxScheduleExceptionIDL  --  schedule override/exception (hold) definition
 // topic literal (TOPIC_SCHEDULE_EXCEPTION) present

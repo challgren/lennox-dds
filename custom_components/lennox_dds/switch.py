@@ -41,10 +41,6 @@ class M30AwaySwitch(CoordinatorEntity[M30BridgeCoordinator], SwitchEntity):
     _attr_has_entity_name = True
     _attr_name = "Away"
     _attr_icon = "mdi:home-export-outline"
-    # Experimental: the away WRITE works, but the M30 doesn't echo manual-away in
-    # period.away, so is_on can't reflect true state yet (readback RE pending).
-    # Disabled by default so it can't silently engage away until that's solved.
-    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: M30BridgeCoordinator, sys_id: str) -> None:
         super().__init__(coordinator)
@@ -63,8 +59,15 @@ class M30AwaySwitch(CoordinatorEntity[M30BridgeCoordinator], SwitchEntity):
 
     @property
     def is_on(self):
-        # Away is system-wide; any zone reflecting it means we're away.
-        return any(z.get("period", {}).get("away") for z in self._zones())
+        # True away state from the "LCC Manual Away Status" topic (bridge field
+        # `manualAway`); per-sysID, so any zone carries it. None until the first
+        # status sample arrives (zoneStatus.period.away is NOT away state).
+        vals = [z.get("manualAway") for z in self._zones()]
+        if any(v is True for v in vals):
+            return True
+        if any(v is False for v in vals):
+            return False
+        return None
 
     async def async_turn_on(self, **kwargs) -> None:
         await self.coordinator.async_send_command({"sysID": self._sys_id, "away": True})

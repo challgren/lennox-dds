@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.13
+
+- **Away switch works for real.** The bridge now subscribes to the dedicated
+  **`LCC Manual Away Status`** topic and streams the true `manualAway` state, so
+  the Away switch reflects reality — including away set on the thermostat or the
+  Lennox app — instead of snapping back. The switch is **re-enabled** (no longer
+  experimental/disabled-by-default).
+- **Timestamped logs.** Every add-on log line is now prefixed with the date/time
+  (the C++ bridge's output is routed through the same timestamped logger), so
+  `debug` captures show exactly when each event happened.
+
 ## 0.1.12
 
 - **Diagnostic:** with `debug_away: true`, the add-on now enumerates every topic
