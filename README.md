@@ -63,6 +63,27 @@ blank and drop your own bundle — see [`lennox_dds/README.md`](./lennox_dds).)
 **3. Done** — the add-on announces itself and the integration auto-configures via
 Supervisor discovery; your climate + temperature/humidity entities appear.
 
+## Entities
+
+All are created automatically per system/zone; ones your model doesn't report
+simply don't appear.
+
+| Entity | Type | Source |
+|--------|------|--------|
+| Thermostat | `climate` | setpoints, HVAC mode, fan, current temp/humidity |
+| Away | `switch` | true state from `LCC Manual Away Status`, writable |
+| Temperature / Humidity | `sensor` | per-zone `zoneStatus` |
+| Outdoor Temperature | `sensor` | weather-service value (falls back to the outdoor-unit sensor) |
+| Outdoor Humidity / Wind Speed | `sensor` | `LCC Weather Status` |
+| Alert | `binary_sensor` (problem) | active faults from `LCC Alert Active/Cleared` (codes + messages) |
+| Maintenance Due | `binary_sensor` (problem) | filter/maintenance reminders + % remaining |
+| Smart Away | `binary_sensor` | geofence away enabled |
+| Demand Response Event | `binary_sensor` | utility OpenADR/AHRI-1380 peak event (pending/opt-out/start/end) |
+| Allergen Defender, Ventilation, Aux Heat, … | `binary_sensor` | `zoneStatus` flags, only when your model marks them valid |
+
+Control is also available over MQTT (`mqtt_enabled`) for external/non-HA use — see
+the add-on docs. Download diagnostics (⋮ on the device) for a full, redacted dump.
+
 > This one repo serves three things: the **integration** (`custom_components/`, via
 > HACS), the **add-on** (`lennox_dds/`, via the Add-on Store), and the **image build
 > source** (`container/`, via CI).

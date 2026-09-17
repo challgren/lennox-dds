@@ -41,7 +41,12 @@ docker build --platform linux/amd64 \
 ## Layout notes
 
 - DDS **topics**: `LCC Zone Status` (read), `Owner Schedule Update`
-  (setpoint/mode/fan), `Owner Manual Away` (Away). The IDL is
+  (setpoint/mode/fan write), `Owner Manual Away` (Away write). Status topics the
+  bridge also reads: `LCC Manual Away Status` (true away state), `LCC Alert
+  Active/Cleared`, `LCC Reminder Status`, `LCC Weather Status`, `LCC Smart Away
+  Status`, `LCC System Status`, `LCC Ocst Event/Enrollment Status`. New types use
+  `@mutable @autoid(HASH)` subsets — declare only the fields you need with EXACT
+  names (member IDs are name hashes); the reader skips the rest. The IDL is
   `container/idl/lennox_m30.idl`; the subscriber is `container/sub/`.
 - **MQTT** (external/non-HA): with `mqtt_enabled`, control topics are
   `lennox_dds/<sysID>/<zone>/set/{temperature,temperature_low,temperature_high,mode,fan_mode,away}`.
