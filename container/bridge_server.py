@@ -90,9 +90,12 @@ def _load_addon_options() -> None:
     os.environ.setdefault("LENNOX_DOMAIN", str(opts.get("domain", 0)))
     os.environ.setdefault("DCPS_DEBUG", str(opts.get("dcps_debug", 0)))
 
-    # MQTT (optional): publish state + HA MQTT discovery. Broker comes from an
+    # MQTT (optional): publish state + accept control. Broker comes from an
     # explicit mqtt_host option, else the Supervisor `mqtt` service (Mosquitto).
+    # mqtt_discovery=false (default) = external/non-HA use: raw state + set/ topics
+    # only, no HA entity (and it removes one if previously published).
     if opts.get("mqtt_enabled"):
+        os.environ.setdefault("MQTT_DISCOVERY", "1" if opts.get("mqtt_discovery") else "0")
         if opts.get("mqtt_host"):
             os.environ.setdefault("MQTT_HOST", str(opts["mqtt_host"]))
             os.environ.setdefault("MQTT_PORT", str(opts.get("mqtt_port", 1883)))
@@ -307,6 +310,7 @@ DCPS_DEBUG = os.environ.get("DCPS_DEBUG", "0")
 WS_HOST = os.environ.get("WS_HOST", "0.0.0.0")
 WS_PORT = int(os.environ.get("WS_PORT", "8099"))
 MQTT_HOST = os.environ.get("MQTT_HOST")
+MQTT_DISCOVERY = os.environ.get("MQTT_DISCOVERY", "0") == "1"  # publish an HA entity?
 
 # latest sample per (sysID, zoneId); newly-connected WS clients get a snapshot.
 _latest: dict[str, dict] = {}
@@ -419,19 +423,61 @@ async def _mqtt_publish(sample: dict) -> None:
     zone = str(sample.get("zoneId", "0"))
     base = f"lennox_dds/{sys_id}/{zone}"
     key = base
-    # one-time HA MQTT discovery for a climate + temp/humidity sensors
+    # one-time HA MQTT discovery for a controllable climate (state + command
+    # topics) -- only when mqtt_discovery is on; otherwise remove any stale entity
+    # so external-only mode doesn't leave a duplicate in HA.
     if key not in _discovery_sent:
         uid = f"lennox_dds_{sys_id}_{zone}"
+        cfg_topic = f"homeassistant/climate/{uid}/config"
+        if not MQTT_DISCOVERY:
+            with suppress(Exception):
+                await _mqtt.publish(cfg_topic, "", retain=True)  # remove HA entity
+            _discovery_sent.add(key)
+            with suppress(Exception):
+                await _mqtt.publish(f"{base}/state", json.dumps(sample), retain=True)
+            return
+        st = f"{base}/state"
         disc = {
             "name": f"Lennox iComfort zone {zone}",
             "unique_id": uid,
-            "current_temperature_topic": f"{base}/state",
-            "current_temperature_template": "{{ value_json.temperature }}",
-            "temperature_state_topic": f"{base}/state",
-            "temperature_state_template": "{{ value_json.period.csp }}",
-            "current_humidity_topic": f"{base}/state",
-            "current_humidity_template": "{{ value_json.humidity }}",
+            "temperature_unit": "F",
+            "min_temp": 45, "max_temp": 95, "temp_step": 1,
             "modes": ["off", "heat", "cool", "heat_cool"],
+            "fan_modes": ["auto", "circulate", "on", "auto_circulate"],
+            # --- current readings ---
+            "current_temperature_topic": st,
+            "current_temperature_template": "{{ value_json.temperature }}",
+            "current_humidity_topic": st,
+            "current_humidity_template": "{{ value_json.humidity }}",
+            "action_topic": st,
+            "action_template":
+                "{{ ['off','heating','cooling','idle','idle'][value_json.tempOperation] }}",
+            # --- hvac mode (state + command) ---
+            "mode_state_topic": st,
+            "mode_state_template":
+                "{{ ['off','heat','cool','heat_cool','heat','off','off','off','off']"
+                "[value_json.period.systemMode] }}",
+            "mode_command_topic": f"{base}/set/mode",
+            # --- fan (state + command) ---
+            "fan_mode_state_topic": st,
+            "fan_mode_state_template":
+                "{{ ['auto','auto','circulate','on','auto_circulate','auto']"
+                "[value_json.period.fanMode] }}",
+            "fan_mode_command_topic": f"{base}/set/fan_mode",
+            # --- single setpoint (heat->hsp, cool->csp, else sp) ---
+            "temperature_state_topic": st,
+            "temperature_state_template":
+                "{{ value_json.period.hsp if value_json.period.systemMode == 1 else "
+                "(value_json.period.csp if value_json.period.systemMode == 2 else "
+                "value_json.period.sp) }}",
+            "temperature_command_topic": f"{base}/set/temperature",
+            # --- heat_cool range (low=hsp, high=csp) ---
+            "temperature_low_state_topic": st,
+            "temperature_low_state_template": "{{ value_json.period.hsp }}",
+            "temperature_low_command_topic": f"{base}/set/temperature_low",
+            "temperature_high_state_topic": st,
+            "temperature_high_state_template": "{{ value_json.period.csp }}",
+            "temperature_high_command_topic": f"{base}/set/temperature_high",
             "device": {"identifiers": [f"lennox_dds_{sys_id}"], "name": f"Lennox iComfort {sys_id}",
                        "manufacturer": "Lennox", "model": "iComfort"},
         }
@@ -441,6 +487,61 @@ async def _mqtt_publish(sample: dict) -> None:
         _discovery_sent.add(key)
     with suppress(Exception):
         await _mqtt.publish(f"{base}/state", json.dumps(sample), retain=True)
+
+
+# incoming MQTT control: lennox_dds/<sysID>/<zone>/set/<field>  (values: HA-style
+# mode/fan strings, or a °F number). Routed through the same DDS control path.
+_MQTT_MODE = {"off": 0, "heat": 1, "cool": 2, "heat_cool": 3}
+_MQTT_FAN = {"auto": 1, "circulate": 2, "on": 3, "auto_circulate": 4}
+
+
+async def _handle_mqtt_command(topic: str, payload: str) -> None:
+    parts = topic.split("/")
+    if len(parts) != 5 or parts[0] != "lennox_dds" or parts[3] != "set":
+        return
+    sys_id, zone_s, field = parts[1], parts[2], parts[4]
+    payload = payload.strip()
+    cmd: dict = {"sysID": sys_id, "zoneId": int(zone_s) if zone_s.isdigit() else 0}
+    try:
+        if field == "mode":
+            m = _MQTT_MODE.get(payload.lower())
+            if m is None:
+                return
+            cmd["mode"] = m
+        elif field == "fan_mode":
+            f = _MQTT_FAN.get(payload.lower())
+            if f is None:
+                return
+            cmd["fan"] = f
+        elif field == "temperature_low":
+            cmd["hsp"] = float(payload)
+        elif field == "temperature_high":
+            cmd["csp"] = float(payload)
+        elif field == "temperature":
+            t = float(payload)
+            mode = _latest.get(f"{sys_id}:{cmd['zoneId']}", {}).get("period", {}).get("systemMode")
+            cmd["hsp" if mode == 1 else "csp" if mode == 2 else "sp"] = t
+        else:
+            return
+    except ValueError:
+        return
+    print(f"[bridge-server] MQTT command {topic} = {payload!r}", flush=True)
+    await _send_command(cmd)
+
+
+async def _mqtt_command_loop() -> None:
+    """Subscribe to the set/# topics and route each to the DDS control path."""
+    if _mqtt is None:
+        return
+    with suppress(Exception):
+        await _mqtt.subscribe("lennox_dds/+/+/set/#")
+        print("[bridge-server] MQTT: subscribed to lennox_dds/+/+/set/# (control)", flush=True)
+    try:
+        async for message in _mqtt.messages:
+            with suppress(Exception):
+                await _handle_mqtt_command(str(message.topic), message.payload.decode())
+    except Exception as err:  # noqa: BLE001
+        print(f"[bridge-server] MQTT command loop ended: {err}", flush=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -484,6 +585,8 @@ async def main() -> None:
 
     if MQTT_HOST:
         await _mqtt_connect()
+        if _mqtt is not None:
+            asyncio.create_task(_mqtt_command_loop())  # external MQTT control
 
     async with websockets.serve(_ws_handler, WS_HOST, WS_PORT):
         print(f"[bridge-server] WebSocket on ws://{WS_HOST}:{WS_PORT}", flush=True)
