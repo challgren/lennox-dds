@@ -31,6 +31,7 @@ _KNOWN_KEYS = {
     "humidityStatus", "tempOperation", "humOperation", "fan", "balancePoint",
     "validFlag", "period", "scheduleExceptionIds", "manualAway", "alerts",
     "reminders", "weather", "system", "smartAwayEnabled", "drEvent", "drEnrollment",
+    "reminderSensors",
 } | {f for f, *_ in STATUS_BINARY_SENSORS}
 
 _KNOWN_PERIOD_KEYS = {

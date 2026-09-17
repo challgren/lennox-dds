@@ -55,6 +55,7 @@ namespace SA = LxSmartAwayStatusIDL;
 namespace SY = Lx_SystemStatusIDL;
 namespace OE = LxOcstEventStatusIDL;
 namespace ON = LxOcstEnrollmentStatusIDL;
+namespace RSS = LxReminderSensorStatusIDL;
 
 // Latest manual-away STATE per sysID, from the "LCC Manual Away Status" topic.
 // Merged into every zoneStatus sample as "manualAway" so the integration's Away
@@ -73,6 +74,7 @@ static std::map<std::string, std::string> g_system;    // json object
 static std::map<std::string, int> g_smartaway;         // -1 unknown / 0 / 1 enabled
 static std::map<std::string, std::string> g_ocst_event;   // json (demand-response event)
 static std::map<std::string, std::string> g_ocst_enroll;  // json (DR enrollment)
+static std::map<std::string, std::map<unsigned long, std::string>> g_reminder_sensors; // id->json
 
 // Period validFlag bits (research/idl/lennox_m30.idl :: Lx_PeriodIDL).
 static const unsigned PERIOD_VALID_SYSTEMMODE = 8;
@@ -697,6 +699,41 @@ struct OcstReader {
   }
 };
 
+// Reminder sensors (LCC Reminder Sensor Status) -> g_reminder_sensors[sysID][id].
+struct ReminderSensorReader {
+  Subscriber_var sub; RSS::reminderSensorDataReader_var r;
+  bool init(DomainParticipant_var& dp, const std::string& part) {
+    RSS::reminderSensorTypeSupport_var ts = new RSS::reminderSensorTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg reminderSensor failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var t = dp->create_topic("LCC Reminder Sensor Status", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t) { std::cerr << "create_topic(reminderSensor) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!part.empty()) { sq.partition.name.length(1); sq.partition.name[0] = part.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); status_dr_qos(dr);
+    DataReader_var dv = sub->create_datareader(t, dr, 0, 0); if (!dv) return false;
+    r = RSS::reminderSensorDataReader::_narrow(dv); return !!r;
+  }
+  void poll() {
+    if (!r) return;
+    RSS::reminderSensorSeq d; SampleInfoSeq inf;
+    if (r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i) {
+      if (!inf[i].valid_data) continue;
+      const auto& st = d[i].status;
+      std::string exp(st.reminderExpiredTime ? (const char*)st.reminderExpiredTime : "");
+      const bool inactive = !st.reminderExpired && st.remainingPct == 0 && exp.empty();
+      if (inactive) { g_reminder_sensors[std::string(d[i].sysID)].erase(d[i].id); continue; }
+      std::ostringstream o;
+      o << "{\"id\":" << d[i].id << ",\"remainingPct\":" << st.remainingPct
+        << ",\"expired\":" << (st.reminderExpired ? "true" : "false")
+        << ",\"replaced\":\"" << json_escape(st.replacedDate) << "\"}";
+      g_reminder_sensors[std::string(d[i].sysID)][d[i].id] = o.str();
+    }
+  }
+};
+
 static void print_sample_json(const ZS::zoneStatus& z) {
   std::ostringstream o;
   o << "{";
@@ -784,6 +821,13 @@ static void print_sample_json(const ZS::zoneStatus& z) {
     o << ",\"drEvent\":" << (oe != g_ocst_event.end() ? oe->second : std::string("null"));
     auto on = g_ocst_enroll.find(sys);
     o << ",\"drEnrollment\":" << (on != g_ocst_enroll.end() ? on->second : std::string("null"));
+    // sensor-based reminders + installed devices (per sysID)
+    o << ",\"reminderSensors\":[";
+    auto rsit = g_reminder_sensors.find(sys);
+    if (rsit != g_reminder_sensors.end()) {
+      bool f = true; for (const auto& kv : rsit->second) { if (!f) o << ","; o << kv.second; f = false; }
+    }
+    o << "]";
   }
   o << "}";
   std::cout << o.str() << std::endl;
@@ -910,6 +954,7 @@ int main(int argc, char** argv) {
     static SmartAwayReader smart_away;
     static SystemReader system_status;
     static OcstReader ocst;
+    static ReminderSensorReader reminder_sensors;
     const bool have_writer = sched.init(dp, partition);
     away.init(dp, partition);   // best-effort; away control is optional
     if (away_status.init(dp, partition))  // true away-state readback
@@ -926,6 +971,8 @@ int main(int argc, char** argv) {
       std::cerr << "[bridge] system reader up on 'LCC System Status'\n";
     if (ocst.init(dp, partition))
       std::cerr << "[bridge] ocst reader up on 'LCC Ocst Event/Enrollment Status'\n";
+    if (reminder_sensors.init(dp, partition))
+      std::cerr << "[bridge] reminder-sensor reader up on 'LCC Reminder Sensor Status'\n";
     if (!have_writer) std::cerr << "[bridge] control writer init failed; reads-only\n";
     std::thread cmd_thread;
     if (have_writer) {
@@ -950,6 +997,7 @@ int main(int argc, char** argv) {
       smart_away.poll();
       system_status.poll();
       ocst.poll();
+      reminder_sensors.poll();
       take_and_print();
       away.poll_echo();            // debug (LENNOX_DEBUG_AWAY): log device away echo
       if (debug_topics) dump_publications(dp, seen_pubs);  // enumerate device topics

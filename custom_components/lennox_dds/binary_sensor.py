@@ -143,7 +143,9 @@ class M30ReminderBinarySensor(CoordinatorEntity[M30BridgeCoordinator], BinarySen
         self._attr_device_info = {"identifiers": {(DOMAIN, sys_id)}}
 
     def _reminders(self) -> list:
-        return _first_sample_for(self.coordinator, self._sys_id).get("reminders") or []
+        # timer-based (reminders) + sensor-based (reminderSensors)
+        s = _first_sample_for(self.coordinator, self._sys_id)
+        return (s.get("reminders") or []) + (s.get("reminderSensors") or [])
 
     @property
     def available(self) -> bool:

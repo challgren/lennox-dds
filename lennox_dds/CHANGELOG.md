@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.16
+
+- **Stability: clean shutdown.** The bridge no longer prints a
+  `RuntimeError: Event loop stopped before Future completed` traceback (and churn)
+  every time the add-on stops/restarts — SIGTERM now cancels the bridge and unwinds
+  gracefully, terminating the DDS subprocess.
+- **Sensor-based reminders**: also read `LCC Reminder Sensor Status` and fold them
+  into the **Maintenance Due** sensor alongside the timer-based reminders.
+
 ## 0.1.15
 
 Four new data sources from the thermostat's status topics (all validated live):

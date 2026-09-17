@@ -351,6 +351,30 @@ module LxReminderStatusIDL {
 };
 
 // -----------------------------------------------------------------------------
+// Reminder sensors -- sensor-based reminders on "LCC Reminder Sensor Status"
+// (vs. the timer-based LCC Reminder Status). Same shape; take the status subset.
+// -----------------------------------------------------------------------------
+module LxReminderSensorStatusIDL {
+    @autoid(HASH) @mutable @nested(TRUE)
+    struct reminderSensorStatus {
+        boolean          isValid;
+        unsigned long    remainingPct;
+        boolean          reminderExpired;
+        string           reminderSetTime;
+        string           reminderExpiredTime;
+        string           replacedDate;
+        unsigned long    validFlag;
+    };
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct reminderSensor {
+        @key unsigned long          id;          // (KEY)
+        @key string                 sysID;       // (KEY)
+        LxReminderSensorStatusIDL::reminderSensorStatus status;
+        unsigned long               validFlag;
+    };
+};
+
+// -----------------------------------------------------------------------------
 // Weather -- outdoor conditions on "LCC Weather Status". We take the scalar env
 // (humidity/wind/cloud) + city/state; the forecast[] arrays are skipped (@mutable).
 // -----------------------------------------------------------------------------

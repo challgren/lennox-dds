@@ -578,7 +578,9 @@ async def _run_bridge() -> None:
         "--security-dir", SEC_DIR, "--stream", "-DCPSDebugLevel", DCPS_DEBUG,
     ]
     global _bridge_proc
-    while True:
+    proc = None
+    try:
+      while True:
         print(f"[bridge-server] launching DDS bridge: {' '.join(argv)}", flush=True)
         proc = await asyncio.create_subprocess_exec(
             *argv, stdin=asyncio.subprocess.PIPE,   # control commands go here
@@ -609,6 +611,14 @@ async def _run_bridge() -> None:
             await stderr_task
         print(f"[bridge-server] DDS bridge exited rc={rc}; restarting in 5s", flush=True)
         await asyncio.sleep(5)  # reconnect/backoff
+    finally:
+        # On shutdown (task cancelled), terminate the DDS subprocess cleanly.
+        if proc is not None and proc.returncode is None:
+            with suppress(ProcessLookupError):
+                proc.terminate()
+            with suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=5)
+        _bridge_proc = None
 
 
 async def _forward_stderr(stream: asyncio.StreamReader) -> None:
@@ -624,6 +634,15 @@ async def main() -> None:
         raise SystemExit("LENNOX_PARTITION (login homeId) is required")
     import websockets  # type: ignore
 
+    # Graceful shutdown: SIGTERM/SIGINT (Supervisor stop/restart) sets a stop event
+    # so we cancel the bridge and unwind cleanly -- NOT loop.stop(), which aborts
+    # run_until_complete mid-await ("Event loop stopped before Future completed").
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop.set)
+
     if MQTT_HOST:
         await _mqtt_connect()
         if _mqtt is not None:
@@ -635,15 +654,15 @@ async def main() -> None:
         # Advertise our container hostname (resolvable by core on the Supervisor
         # network), not the 0.0.0.0 bind address.
         _post_discovery(socket.gethostname(), WS_PORT)
-        await _run_bridge()
+        bridge = asyncio.create_task(_run_bridge())
+        await stop.wait()
+        print("[bridge-server] shutdown signal; stopping bridge", flush=True)
+        bridge.cancel()
+        with suppress(asyncio.CancelledError):
+            await bridge
 
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with suppress(NotImplementedError):
-            loop.add_signal_handler(sig, loop.stop)
     await_identity_valid()  # block until our identity cert's notBefore has passed
     with suppress(KeyboardInterrupt):
-        loop.run_until_complete(main())
+        asyncio.run(main())

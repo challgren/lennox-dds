@@ -19,6 +19,7 @@ cat >> ./lennox_m30.idl <<'IDL'
 #pragma DCPS_DATA_TYPE "LxAlertActiveIDL::alertActive"
 #pragma DCPS_DATA_TYPE "LxAlertClearedIDL::alertCleared"
 #pragma DCPS_DATA_TYPE "LxReminderStatusIDL::reminder"
+#pragma DCPS_DATA_TYPE "LxReminderSensorStatusIDL::reminderSensor"
 #pragma DCPS_DATA_TYPE "LxWeatherStatusIDL::weatherStatus"
 #pragma DCPS_DATA_TYPE "LxSmartAwayStatusIDL::smartAway"
 #pragma DCPS_DATA_TYPE "Lx_SystemStatusIDL::systemStatus"
