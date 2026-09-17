@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+- The companion **`lennox_dds` integration is now in this repo** (under
+  `custom_components/`) and installable via **HACS** as a custom repository — no
+  more manual copy. Add-on image unchanged from 0.1.5.
+
 ## 0.1.6
 
 - Fix the thermostat card showing a range (e.g. `66–76`) in **cool** mode — the

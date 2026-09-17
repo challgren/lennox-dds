@@ -1,0 +1,19 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lennox iComfort (DDS)",
+        "description": "Enter the DDS sidecar bridge WebSocket URL.",
+        "data": { "ws_url": "Bridge WebSocket URL" }
+      },
+      "hassio_confirm": {
+        "title": "Lennox iComfort (DDS)",
+        "description": "Set up the Lennox iComfort DDS bridge add-on discovered at {url}?"
+      }
+    },
+    "abort": {
+      "already_configured": "This bridge is already configured.",
+      "invalid_discovery_info": "The add-on discovery message was missing a host."
+    }
+  }
+}

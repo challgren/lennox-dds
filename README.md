@@ -45,14 +45,22 @@ client, auto-wired by Supervisor discovery) turns that into entities.
 
 ## Install
 
-1. Settings → Add-ons → Add-on Store → ⋮ → **Repositories** → add
-   `https://github.com/challgren/lennox-dds`
-2. Install **Lennox iComfort DDS Bridge**, set **`lennox_email`** + **`lennox_password`**,
-   and start it. It provisions the bundle and auto-derives your `home_id`.
-   (Advanced/offline: leave those blank and drop your own bundle — see
-   [`lennox_dds/README.md`](./lennox_dds).)
-3. The `lennox_dds` integration is discovered automatically; confirm it and your
-   climate + sensor entities appear.
+**1. Integration (via HACS)** — HACS → ⋮ → **Custom repositories** → add
+`https://github.com/challgren/lennox-dds` as category **Integration** → install
+**Lennox iComfort (DDS)** → **restart Home Assistant**.
+
+**2. Add-on** — Settings → Add-ons → Add-on Store → ⋮ → **Repositories** → add
+`https://github.com/challgren/lennox-dds` → install **Lennox iComfort DDS Bridge**,
+set **`lennox_email`** + **`lennox_password`**, and start it. It provisions the
+DDS-Security bundle and auto-derives your `home_id`. (Advanced/offline: leave those
+blank and drop your own bundle — see [`lennox_dds/README.md`](./lennox_dds).)
+
+**3. Done** — the add-on announces itself and the integration auto-configures via
+Supervisor discovery; your climate + temperature/humidity entities appear.
+
+> This one repo serves three things: the **integration** (`custom_components/`, via
+> HACS), the **add-on** (`lennox_dds/`, via the Add-on Store), and the **image build
+> source** (`container/`, via CI).
 
 ## Repository layout
 
