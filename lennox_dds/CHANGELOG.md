@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.9
+
+- **Away control**: Manual Away is now writable, not just visible. The bridge
+  publishes a `manualAwayUpdate` on the `Owner Manual Away` topic, and the
+  integration adds an **Away switch** per thermostat (Settings → Devices &
+  Services → Lennox iComfort → *Away*). Also controllable over MQTT via
+  `lennox_dds/<sysID>/<zone>/set/away` (`on`/`off`).
+- The climate card and the switch stay in sync: flipping Away shows up in
+  `period.away` across zones.
+
 ## 0.1.8
 
 - **Allergen Defender + more status flags**: the bridge now streams the full

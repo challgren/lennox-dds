@@ -253,6 +253,21 @@ module LxScheduleUpdateIDL {
     };
 };
 
+// -----------------------------------------------------------------------------
+// Manual Away control -- write topic "Owner Manual Away" (TOPIC_MANUAL_AWAY).
+// Field order from the app's manualAwayUpdate(sysID, setAway, validFlag) ctor.
+// -----------------------------------------------------------------------------
+module LxManualAwayUpdateIDL {
+    const unsigned long ManualAway_Valid_SetAway = 1;
+
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct manualAwayUpdate {
+        @key string             sysID;       // wire pos 0 (KEY)
+        boolean                 setAway;     //          1
+        unsigned long           validFlag;   //          2
+    };
+};
+
 // ---------------------------------------------------------------------------
 // LxScheduleExceptionIDL  --  schedule override/exception (hold) definition
 // topic literal (TOPIC_SCHEDULE_EXCEPTION) present

@@ -41,6 +41,7 @@ namespace ZS = LxZoneStatusIDL;
 namespace SU = LxScheduleUpdateIDL;
 namespace SC = LxSchedulesIDL;
 namespace PD = Lx_PeriodIDL;
+namespace MA = LxManualAwayUpdateIDL;
 
 // Period validFlag bits (research/idl/lennox_m30.idl :: Lx_PeriodIDL).
 static const unsigned PERIOD_VALID_SYSTEMMODE = 8;
@@ -139,12 +140,79 @@ struct ScheduleWriter {
   }
 };
 
-// Parse ONE stdin control line and drive the writer. Grammar (from bridge_server):
+// Persistent writer on the "Owner Manual Away" topic (manualAwayUpdate).
+struct AwayWriter {
+  Topic_var topic;
+  Publisher_var pub;
+  DataWriter_var writer;
+  MA::manualAwayUpdateDataWriter_var aw;
+
+  bool init(DomainParticipant_var& dp, const std::string& partition) {
+    using namespace DDS;
+    MA::manualAwayUpdateTypeSupport_var ts = new MA::manualAwayUpdateTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg manualAwayUpdate failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    topic = dp->create_topic("Owner Manual Away", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!topic) { std::cerr << "create_topic(Owner Manual Away) failed\n"; return false; }
+    PublisherQos pub_qos; dp->get_default_publisher_qos(pub_qos);
+    if (!partition.empty()) { pub_qos.partition.name.length(1); pub_qos.partition.name[0] = partition.c_str(); }
+    pub = dp->create_publisher(pub_qos, 0, 0);
+    if (!pub) { std::cerr << "create_publisher(away) failed\n"; return false; }
+    DataWriterQos dw_qos; pub->get_default_datawriter_qos(dw_qos);
+    dw_qos.reliability.kind = RELIABLE_RELIABILITY_QOS;
+    dw_qos.durability.kind = VOLATILE_DURABILITY_QOS;
+    dw_qos.representation.value.length(1);
+    dw_qos.representation.value[0] = XCDR2_DATA_REPRESENTATION;
+    writer = pub->create_datawriter(topic, dw_qos, 0, 0);
+    if (!writer) { std::cerr << "create_datawriter(away) failed\n"; return false; }
+    aw = MA::manualAwayUpdateDataWriter::_narrow(writer);
+    return !!aw;
+  }
+
+  bool write_away(const std::string& sys_id, bool set_away) {
+    if (!aw) { std::cerr << "[cmd] away writer not initialized\n"; return false; }
+    // wait up to 15s for the device's away reader to match us
+    StatusCondition_var scnd = writer->get_statuscondition();
+    scnd->set_enabled_statuses(PUBLICATION_MATCHED_STATUS);
+    WaitSet_var ws = new WaitSet; ws->attach_condition(scnd);
+    Duration_t wait = { 1, 0 }; ConditionSeq active;
+    PublicationMatchedStatus pm; pm.current_count = 0;
+    for (int i = 0; i < 15; ++i) {
+      writer->get_publication_matched_status(pm);
+      if (pm.current_count > 0) break;
+      ws->wait(active, wait);
+    }
+    ws->detach_condition(scnd);
+    std::cerr << "[cmd] manualAwayUpdate writer matched " << pm.current_count << " reader(s)\n";
+    if (pm.current_count == 0) { std::cerr << "[cmd] no away reader; not writing\n"; return false; }
+    if (::getenv("LENNOX_DRY_RUN")) { std::cerr << "[cmd] DRY_RUN away, skipping write\n"; return true; }
+    MA::manualAwayUpdate m;
+    m.sysID = sys_id.c_str();
+    m.setAway = set_away;
+    m.validFlag = 1;  // ManualAway_Valid_SetAway
+    const ReturnCode_t rc = aw->write(m, HANDLE_NIL);
+    std::cerr << "[cmd] WROTE manualAwayUpdate setAway=" << (set_away ? "true" : "false")
+              << " rc=" << rc << "\n";
+    Duration_t settle = { 3, 0 };
+    writer->wait_for_acknowledgments(settle);
+    return rc == RETCODE_OK;
+  }
+};
+
+// Parse ONE stdin control line and drive the writers. Grammar (from bridge_server):
 //   SET <sysID> <scheduleId> [mode=<int>] [csp=<F>] [hsp=<F>] [sp=<F>] [fan=<int>]
+//   AWAY <sysID> <0|1>
 // Unknown lines are ignored. Fields present set their PERIOD_VALID_* bit.
-static void handle_command_line(ScheduleWriter& sched, const std::string& line) {
+static void handle_command_line(ScheduleWriter& sched, AwayWriter& away, const std::string& line) {
   std::istringstream iss(line);
   std::string verb; iss >> verb;
+  if (verb == "AWAY") {
+    std::string sys_id; int on = 0;
+    iss >> sys_id >> on;
+    if (sys_id.empty()) { std::cerr << "[cmd] AWAY missing sysID\n"; return; }
+    away.write_away(sys_id, on != 0);
+    return;
+  }
   if (verb != "SET") { std::cerr << "[cmd] ignoring line: " << line << "\n"; return; }
   std::string sys_id; unsigned schedule_id = 0;
   iss >> sys_id >> schedule_id;
@@ -227,6 +295,7 @@ static void print_sample_json(const ZS::zoneStatus& z) {
   o << ",\"hsp\":" << z.period.hsp << ",\"hspC\":" << z.period.hspC;
   o << ",\"csp\":" << z.period.csp << ",\"cspC\":" << z.period.cspC;
   o << ",\"husp\":" << z.period.husp << ",\"desp\":" << z.period.desp;
+  o << ",\"away\":" << (z.period.away ? "true" : "false");
   o << "}";
   o << "}";
   std::cout << o.str() << std::endl;
@@ -342,15 +411,17 @@ int main(int argc, char** argv) {
     // Persistent control writer + stdin command reader. The bridge server writes
     // one "SET ..." line per HA control request to our stdin; each drives a
     // scheduleUpdate. Kept in a detached thread so the sample loop is unblocked.
-    ScheduleWriter sched;
+    static ScheduleWriter sched;
+    static AwayWriter away;
     const bool have_writer = sched.init(dp, partition);
+    away.init(dp, partition);   // best-effort; away control is optional
     if (!have_writer) std::cerr << "[bridge] control writer init failed; reads-only\n";
     std::thread cmd_thread;
     if (have_writer) {
-      cmd_thread = std::thread([&sched]() {
+      cmd_thread = std::thread([]() {
         std::string line;
         while (std::getline(std::cin, line)) {
-          if (!line.empty()) handle_command_line(sched, line);
+          if (!line.empty()) handle_command_line(sched, away, line);
         }
         std::cerr << "[bridge] stdin closed; command channel ended\n";
       });

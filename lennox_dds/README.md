@@ -4,8 +4,15 @@ OpenDDS 3.22 sidecar that speaks the Lennox iComfort (M30 / prod4) realtime data
 plane — DDS-RTPS + DDS-Security over the RtpsRelay — and exposes it to Home
 Assistant. It streams `zoneStatus` samples over a local WebSocket and accepts
 control commands (setpoint / mode / fan) that it writes back as schedule
-overrides. The companion `lennox_dds` integration consumes this and is auto-wired
-via Supervisor discovery.
+overrides, plus **Away** (`manualAwayUpdate` on the `Owner Manual Away` topic). The
+companion `lennox_dds` integration consumes this and is auto-wired via Supervisor
+discovery.
+
+### MQTT control topics (external / non-HA)
+
+With `mqtt_enabled: true`, publish to `lennox_dds/<sysID>/<zone>/set/<field>`:
+`temperature`, `temperature_low`, `temperature_high`, `mode`, `fan_mode`, and
+`away` (`on`/`off`). State is on `lennox_dds/<sysID>/<zone>/state`.
 
 ## Setup — two ways to supply credentials
 

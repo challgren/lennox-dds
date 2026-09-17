@@ -331,6 +331,9 @@ def _build_set_line(cmd: dict) -> str | None:
     sys_id = cmd.get("sysID")
     if not sys_id:
         return None
+    # Manual Away is a per-system toggle on its own topic (not a schedule field).
+    if cmd.get("away") is not None:
+        return f"AWAY {sys_id} {1 if cmd['away'] else 0}"
     schedule_id = SCHEDULE_OVERRIDE_BASE + int(cmd.get("zoneId", 0))
     parts = ["SET", str(sys_id), str(schedule_id)]
     for field in ("mode", "fan"):  # integer enum fields
@@ -521,6 +524,8 @@ async def _handle_mqtt_command(topic: str, payload: str) -> None:
             t = float(payload)
             mode = _latest.get(f"{sys_id}:{cmd['zoneId']}", {}).get("period", {}).get("systemMode")
             cmd["hsp" if mode == 1 else "csp" if mode == 2 else "sp"] = t
+        elif field == "away":
+            cmd["away"] = payload.lower() in ("on", "true", "1")
         else:
             return
     except ValueError:

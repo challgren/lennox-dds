@@ -7,7 +7,9 @@ the Lennox "prod4"/v4 cloud** (notably the **iComfort M30**), which the classic
 longer reach.
 
 - ✅ Live climate + temperature/humidity, **local push**
-- ✅ Control: setpoints, HVAC mode, fan
+- ✅ Control: setpoints, HVAC mode, fan, and **Away**
+- ✅ Read-only status flags (allergen defender, ventilation, aux heat, defrost, …)
+  surfaced as binary sensors when your model reports them
 - ✅ No manual certificates — the add-on provisions itself from your Lennox login
 
 ## Why this exists
@@ -37,7 +39,8 @@ HA ── WebSocket ──▶ DDS bridge (this add-on) ── DDS-RTPS/Security 
    (`/permissions/DDS.LCC_OWNER?nonce=`, same nonce).
 3. Join **domain 0**, partition = your homeId, over the RtpsRelay; subscribe the
    **`LCC Zone Status`** topic → live `zoneStatus`. Control = writes to the
-   **`Owner Schedule Update`** topic.
+   **`Owner Schedule Update`** topic (setpoints / mode / fan) and
+   **`Owner Manual Away`** (`manualAwayUpdate`, the Away switch).
 
 The bridge is a tiny C++ OpenDDS subscriber + a Python server that streams JSON to a
 local WebSocket; the companion **`lennox_dds`** HA integration (a thin `local_push`
