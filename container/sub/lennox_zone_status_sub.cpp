@@ -338,6 +338,15 @@ static void print_sample_json(const ZS::zoneStatus& z) {
   o << ",\"husp\":" << z.period.husp << ",\"desp\":" << z.period.desp;
   o << ",\"away\":" << (z.period.away ? "true" : "false");
   o << "}";
+  // schedule exceptions (field 18): manual away / holds likely show up here as an
+  // active exception -> candidate for a reliable away-state indicator.
+  o << ",\"scheduleExceptionIds\":[";
+  for (CORBA::ULong i = 0; i < z.scheduleExceptionIds.length(); ++i) {
+    if (i) o << ",";
+    o << "{\"id\":" << z.scheduleExceptionIds[i].id
+      << ",\"scheduleId\":" << z.scheduleExceptionIds[i].scheduleId << "}";
+  }
+  o << "]";
   o << "}";
   std::cout << o.str() << std::endl;
 }

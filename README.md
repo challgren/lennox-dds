@@ -79,6 +79,22 @@ publishes it to GHCR. See [`container/`](./container) for the internals and the
 one interop note (the device runs an OCI-proprietary OpenDDS 3.22 `pkg-21`, so a
 from-source OpenDDS needs the `skip_sequence_dheader` XTypes patch).
 
+## Reporting a bug
+
+Please [open an issue](https://github.com/challgren/lennox-dds/issues/new/choose)
+and attach a **diagnostics** file — it's the fastest way to a fix:
+
+1. **Settings → Devices & Services → Lennox iComfort (DDS) → ⋮ → Download
+   diagnostics.** It's auto-redacted (no sysID, no credentials) and includes the
+   integration version, decoded status flags, and an `unrecognized_fields` section
+   that flags data your model exposes but the integration doesn't handle yet.
+2. For control or data problems, set **`debug: true`** in the add-on config and
+   restart — the add-on log then prints every raw sample (`[raw] {…}`). Paste the
+   relevant lines into the issue.
+
+Different hardware (S30/E30, PureAir, humidifiers, multi-zone) reports fields the
+base M30 doesn't; a diagnostics file from your device is how we add support.
+
 ## Status / credits
 
 Reverse-engineered from the Lennox Home app against a live M30; shared upstream at

@@ -1,0 +1,41 @@
+name: New / unrecognized device fields
+description: Your model exposes data or features this add-on doesn't surface yet
+labels: ["enhancement", "device-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Different Lennox hardware (S30/E30, PureAir, humidifiers, multi-zone)
+        reports fields the base M30 doesn't. Help us add support!
+
+        **Download diagnostics** (Settings → Devices & Services → Lennox iComfort
+        (DDS) → ⋮ → Download diagnostics) and attach it. If its
+        **`unrecognized_fields`** section is non-empty, that's exactly what we need.
+  - type: input
+    id: thermostat
+    attributes:
+      label: Thermostat + IAQ hardware
+      placeholder: "e.g. S30 with PureAir S and a humidifier, 2 zones"
+    validations:
+      required: true
+  - type: textarea
+    id: feature
+    attributes:
+      label: What feature or data is missing?
+      placeholder: "e.g. humidity setpoint control, ventilation timer, a 2nd zone, dehumidify status"
+    validations:
+      required: true
+  - type: textarea
+    id: unrecognized
+    attributes:
+      label: unrecognized_fields (from diagnostics)
+      description: Paste the `unrecognized_fields` block, or attach the whole diagnostics file above.
+      render: json
+    validations:
+      required: false
+  - type: checkboxes
+    id: attached
+    attributes:
+      label: Diagnostics
+      options:
+        - label: I attached the Download diagnostics file.

@@ -89,12 +89,14 @@ def _load_addon_options() -> None:
         os.environ.setdefault("LENNOX_TOPIC", str(opts["topic"]))
     os.environ.setdefault("LENNOX_DOMAIN", str(opts.get("domain", 0)))
     os.environ.setdefault("DCPS_DEBUG", str(opts.get("dcps_debug", 0)))
-    # Debug: log each raw sample + subscribe to the away topic to discover how the
-    # device reports away state back. One switch drives both.
-    if opts.get("debug_away"):
+    # Debug: `debug` logs every raw sample (any model) for bug reports. `debug_away`
+    # additionally subscribes read-only to the away topic (away-state RE).
+    if opts.get("debug") or opts.get("debug_away"):
         os.environ.setdefault("LENNOX_RAW_DUMP", "1")
+        print("[bridge-server] debug ON: raw sample logging", flush=True)
+    if opts.get("debug_away"):
         os.environ.setdefault("LENNOX_DEBUG_AWAY", "1")
-        print("[bridge-server] debug_away ON: raw dump + away echo reader", flush=True)
+        print("[bridge-server] debug_away ON: away echo reader", flush=True)
 
     # MQTT (optional): publish state + accept control. Broker comes from an
     # explicit mqtt_host option, else the Supervisor `mqtt` service (Mosquitto).

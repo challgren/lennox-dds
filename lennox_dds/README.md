@@ -42,6 +42,7 @@ read-only into the add-on (see `security_dir`).
 | `topic`           | Topic name (default `LCC Zone Status`).                            |
 | `security_dir`    | (B) where the add-on reads the bundle (default `/homeassistant_config/lennox_dds/security`). |
 | `dcps_debug`      | OpenDDS debug level (default `0`).                                 |
+| `debug`           | Log every raw sample to the add-on log — turn on for bug reports (default `false`). |
 | `mqtt_enabled`    | Also publish state via MQTT discovery (default `false`).          |
 
 ## Notes

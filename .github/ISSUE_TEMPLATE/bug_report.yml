@@ -1,0 +1,59 @@
+name: Bug report
+description: Something isn't working (entities wrong/missing, add-on errors, control not applying)
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The single most useful thing you can attach is the
+        **diagnostics file**: Settings → Devices & Services → **Lennox iComfort
+        (DDS)** → ⋮ → **Download diagnostics**. It's auto-redacted (no sysID,
+        no credentials). Please drag it into this issue.
+  - type: input
+    id: thermostat
+    attributes:
+      label: Thermostat model
+      placeholder: "e.g. M30, S30, E30, plus any IAQ hardware (PureAir, humidifier)"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Add-on + integration versions
+      description: Add-on version (Settings → Add-ons → Lennox iComfort DDS Bridge) and integration version (shown in the diagnostics file).
+      placeholder: "add-on 0.1.11 / integration 0.1.11"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Add-on log
+      description: |
+        Settings → Add-ons → Lennox iComfort DDS Bridge → **Log**. For control or
+        data issues, set **`debug: true`** in the add-on config, restart, reproduce,
+        then paste the relevant lines (the `[raw] {…}` samples especially).
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: attached
+    attributes:
+      label: Diagnostics
+      options:
+        - label: I attached the Download diagnostics file (or explained why I couldn't).

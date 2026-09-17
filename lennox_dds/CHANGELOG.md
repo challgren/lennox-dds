@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.11
+
+Better logging + bug reporting for everyone:
+
+- **`debug` option** (default `false`): logs every raw sample (`[raw] {…}`) to the
+  add-on log — turn it on to capture what your model emits for a bug report.
+  (`debug_away` still adds the away-topic echo reader on top.)
+- **Richer diagnostics:** Download diagnostics now includes the integration
+  version, decoded status flags, and an **`unrecognized_fields`** section that
+  flags data your hardware exposes but the integration doesn't handle yet. Still
+  fully redacted (no sysID, no credentials).
+- **Issue templates:** Bug report + "New/unrecognized device fields" forms that
+  point you at the diagnostics file.
+- The raw stream now includes `scheduleExceptionIds` (zoneStatus field 18) — the
+  candidate for reliable away-state detection.
+
 ## 0.1.10
 
 - **Away switch disabled by default (experimental).** The away *write* works, but
