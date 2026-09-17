@@ -23,6 +23,7 @@
 #include <dds/DCPS/Marked_Default_Qos.h>
 #include <dds/DCPS/WaitSet.h>
 #include <dds/DdsDcpsCoreC.h>
+#include <dds/DdsDcpsCoreTypeSupportC.h>  // built-in topic (DCPSPublication) reader
 #include <dds/DdsSecurityCoreC.h>
 
 #include "lennox_m30TypeSupportImpl.h"
@@ -35,6 +36,7 @@
 #include <csignal>
 #include <thread>
 #include <vector>
+#include <set>
 
 using namespace DDS;
 namespace ZS = LxZoneStatusIDL;
@@ -302,6 +304,31 @@ static std::string json_escape(const char* s) {
   return o;
 }
 
+// Debug (LENNOX_DEBUG_AWAY): enumerate every topic remote participants (the M30)
+// publish, via the DCPSPublication built-in topic. Logs each topic|type once.
+// This is how we locate the topic carrying away/system state that zoneStatus
+// doesn't expose. Uses read() (not take()) so discovery data isn't consumed.
+static void dump_publications(DomainParticipant_ptr dp, std::set<std::string>& seen) {
+  Subscriber_var bsub = dp->get_builtin_subscriber();
+  if (!bsub) return;
+  DataReader_var dr = bsub->lookup_datareader("DCPSPublication");
+  if (!dr) return;
+  DDS::PublicationBuiltinTopicDataDataReader_var pr =
+      DDS::PublicationBuiltinTopicDataDataReader::_narrow(dr);
+  if (!pr) return;
+  DDS::PublicationBuiltinTopicDataSeq data;
+  SampleInfoSeq info;
+  if (pr->read(data, info, LENGTH_UNLIMITED, ANY_SAMPLE_STATE,
+               ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+  for (CORBA::ULong i = 0; i < data.length(); ++i) {
+    if (!info[i].valid_data) continue;
+    std::string key = std::string(data[i].topic_name) + "|" + std::string(data[i].type_name);
+    if (seen.insert(key).second)
+      std::cerr << "[debug-topics] publishes topic='" << data[i].topic_name
+                << "' type='" << data[i].type_name << "'\n";
+  }
+}
+
 static void print_sample_json(const ZS::zoneStatus& z) {
   std::ostringstream o;
   o << "{";
@@ -434,6 +461,8 @@ int main(int argc, char** argv) {
   }
 
   const bool stream = has_flag(argc, argv, "--stream");
+  const bool debug_topics = ::getenv("LENNOX_DEBUG_AWAY") != nullptr;
+  std::set<std::string> seen_pubs;
   ReadCondition_var rc = reader->create_readcondition(ANY_SAMPLE_STATE, ANY_VIEW_STATE, ALIVE_INSTANCE_STATE);
   WaitSet_var ws = new WaitSet;
   ws->attach_condition(rc);
@@ -484,6 +513,7 @@ int main(int argc, char** argv) {
       ws->wait(active, poll);      // RETCODE_TIMEOUT when idle -- fine, just re-loop
       take_and_print();
       away.poll_echo();            // debug (LENNOX_DEBUG_AWAY): log device away echo
+      if (debug_topics) dump_publications(dp, seen_pubs);  // enumerate device topics
     }
     std::cerr << "[bridge] shutting down\n";
     rc_exit = 0;

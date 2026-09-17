@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.12
+
+- **Diagnostic:** with `debug_away: true`, the add-on now enumerates every topic
+  the thermostat publishes (via the DCPSPublication built-in topic) and logs each
+  as `[debug-topics] publishes topic='…' type='…'`. Since `zoneStatus` carries no
+  clean away flag, this locates the system/status topic that does — the next step
+  toward true Away-state detection.
+
 ## 0.1.11
 
 Better logging + bug reporting for everyone:
