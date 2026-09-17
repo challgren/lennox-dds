@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.14
+
+- **HVAC alerts.** The bridge now subscribes to the `LCC Alert Active` /
+  `LCC Alert Cleared` topics and streams active faults. The integration adds an
+  **Alert** binary sensor (device class `problem`) per system — `on` when a fault
+  is active, with the alert `codes`, `messages`, and full details as attributes.
+  Great for automations that notify you when the system reports a problem.
+
 ## 0.1.13
 
 - **Away switch works for real.** The bridge now subscribes to the dedicated

@@ -33,6 +33,7 @@
 #include <string>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <csignal>
 #include <thread>
 #include <vector>
@@ -45,12 +46,19 @@ namespace SC = LxSchedulesIDL;
 namespace PD = Lx_PeriodIDL;
 namespace MA = LxManualAwayUpdateIDL;
 namespace MAS = LxManualAwayStatusIDL;
+namespace AA = LxAlertActiveIDL;
+namespace AC = LxAlertClearedIDL;
+namespace AL = LxAlertIDL;
 
 // Latest manual-away STATE per sysID, from the "LCC Manual Away Status" topic.
 // Merged into every zoneStatus sample as "manualAway" so the integration's Away
 // switch can reflect true state. -1 = unknown, 0 = home, 1 = away.
 #include <map>
 static std::map<std::string, int> g_away_status;
+
+// Active alerts per sysID: id -> pre-rendered JSON object. Updated by the alert
+// readers; merged into every zoneStatus sample as "alerts":[...].
+static std::map<std::string, std::map<unsigned long, std::string>> g_alerts;
 
 // Period validFlag bits (research/idl/lennox_m30.idl :: Lx_PeriodIDL).
 static const unsigned PERIOD_VALID_SYSTEMMODE = 8;
@@ -307,7 +315,18 @@ static void add_prop(PropertyQosPolicy& p, const char* name, const std::string& 
 
 static std::string json_escape(const char* s) {
   std::string o; if (!s) return o;
-  for (const char* p = s; *p; ++p) { if (*p == '"' || *p == '\\') o += '\\'; o += *p; }
+  for (const char* p = s; *p; ++p) {
+    switch (*p) {
+      case '"': o += "\\\""; break;
+      case '\\': o += "\\\\"; break;
+      case '\n': o += "\\n"; break;
+      case '\r': o += "\\r"; break;
+      case '\t': o += "\\t"; break;
+      default:
+        if ((unsigned char)*p < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", (unsigned char)*p); o += b; }
+        else o += *p;
+    }
+  }
   return o;
 }
 
@@ -382,6 +401,86 @@ struct AwayStatusReader {
   }
 };
 
+// Readers on "LCC Alert Active" (add/update) + "LCC Alert Cleared" (remove) ->
+// keep g_alerts current so active faults reach the integration.
+struct AlertReader {
+  Subscriber_var sub;
+  AA::alertActiveDataReader_var active_r;
+  AC::alertClearedDataReader_var cleared_r;
+
+  static void apply_dr_qos(DataReaderQos& dr) {
+    dr.reliability.kind = RELIABLE_RELIABILITY_QOS;
+    dr.durability.kind  = TRANSIENT_LOCAL_DURABILITY_QOS;  // last state on join
+    dr.representation.value.length(1);
+    dr.representation.value[0] = XCDR2_DATA_REPRESENTATION;
+    dr.type_consistency.kind = ALLOW_TYPE_COERCION;
+    dr.type_consistency.ignore_member_names = true;
+    dr.type_consistency.prevent_type_widening = false;
+    dr.type_consistency.force_type_validation = false;
+  }
+
+  bool init(DomainParticipant_var& dp, const std::string& partition) {
+    AA::alertActiveTypeSupport_var ts1 = new AA::alertActiveTypeSupportImpl();
+    AC::alertClearedTypeSupport_var ts2 = new AC::alertClearedTypeSupportImpl();
+    if (ts1->register_type(dp, "") != RETCODE_OK || ts2->register_type(dp, "") != RETCODE_OK) {
+      std::cerr << "reg alert types failed\n"; return false; }
+    CORBA::String_var tn1 = ts1->get_type_name(), tn2 = ts2->get_type_name();
+    Topic_var t1 = dp->create_topic("LCC Alert Active", tn1, TOPIC_QOS_DEFAULT, 0, 0);
+    Topic_var t2 = dp->create_topic("LCC Alert Cleared", tn2, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t1 || !t2) { std::cerr << "create_topic(alerts) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!partition.empty()) { sq.partition.name.length(1); sq.partition.name[0] = partition.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0);
+    if (!sub) { std::cerr << "create_subscriber(alerts) failed\n"; return false; }
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); apply_dr_qos(dr);
+    DataReader_var r1 = sub->create_datareader(t1, dr, 0, 0);
+    DataReader_var r2 = sub->create_datareader(t2, dr, 0, 0);
+    if (!r1 || !r2) { std::cerr << "create_datareader(alerts) failed\n"; return false; }
+    active_r = AA::alertActiveDataReader::_narrow(r1);
+    cleared_r = AC::alertClearedDataReader::_narrow(r2);
+    return !!active_r && !!cleared_r;
+  }
+
+  static std::string render(unsigned long id, const AL::alert& a) {
+    std::ostringstream o;
+    o << "{\"id\":" << id << ",\"code\":" << a.code
+      << ",\"equipmentType\":" << a.equipmentType << ",\"count\":" << a.count
+      << ",\"message\":\"" << json_escape(a.userMessage) << "\""
+      << ",\"since\":\"" << json_escape(a.timestampFirst) << "\""
+      << ",\"last\":\"" << json_escape(a.timestampLast) << "\"}";
+    return o.str();
+  }
+
+  void poll() {
+    if (active_r) {
+      AA::alertActiveSeq d; SampleInfoSeq inf;
+      if (active_r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE,
+                         ANY_VIEW_STATE, ANY_INSTANCE_STATE) == RETCODE_OK)
+        for (CORBA::ULong i = 0; i < d.length(); ++i) {
+          if (!inf[i].valid_data) continue;
+          std::string sys(d[i].sysID);
+          if (d[i].active.isStillActive) {
+            g_alerts[sys][d[i].id] = render(d[i].id, d[i].active);
+            std::cerr << "[alert] active id=" << d[i].id << " code=" << d[i].active.code
+                      << " sys=" << sys << " msg=" << d[i].active.userMessage << "\n";
+          } else {
+            g_alerts[sys].erase(d[i].id);
+          }
+        }
+    }
+    if (cleared_r) {
+      AC::alertClearedSeq d; SampleInfoSeq inf;
+      if (cleared_r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE,
+                          ANY_VIEW_STATE, ANY_INSTANCE_STATE) == RETCODE_OK)
+        for (CORBA::ULong i = 0; i < d.length(); ++i) {
+          if (!inf[i].valid_data) continue;
+          g_alerts[std::string(d[i].sysID)].erase(d[i].id);
+          std::cerr << "[alert] cleared id=" << d[i].id << " sys=" << d[i].sysID << "\n";
+        }
+    }
+  }
+};
+
 static void print_sample_json(const ZS::zoneStatus& z) {
   std::ostringstream o;
   o << "{";
@@ -433,6 +532,16 @@ static void print_sample_json(const ZS::zoneStatus& z) {
     auto it = g_away_status.find(std::string(z.sysID));
     if (it == g_away_status.end() || it->second < 0) o << ",\"manualAway\":null";
     else o << ",\"manualAway\":" << (it->second ? "true" : "false");
+  }
+  // active alerts (per sysID) from the "LCC Alert Active/Cleared" topics
+  {
+    o << ",\"alerts\":[";
+    auto it = g_alerts.find(std::string(z.sysID));
+    if (it != g_alerts.end()) {
+      bool first = true;
+      for (const auto& kv : it->second) { if (!first) o << ","; o << kv.second; first = false; }
+    }
+    o << "]";
   }
   o << "}";
   std::cout << o.str() << std::endl;
@@ -553,10 +662,13 @@ int main(int argc, char** argv) {
     static ScheduleWriter sched;
     static AwayWriter away;
     static AwayStatusReader away_status;
+    static AlertReader alerts;
     const bool have_writer = sched.init(dp, partition);
     away.init(dp, partition);   // best-effort; away control is optional
     if (away_status.init(dp, partition))  // true away-state readback
       std::cerr << "[bridge] away-status reader up on 'LCC Manual Away Status'\n";
+    if (alerts.init(dp, partition))       // active fault alerts
+      std::cerr << "[bridge] alert readers up on 'LCC Alert Active/Cleared'\n";
     if (!have_writer) std::cerr << "[bridge] control writer init failed; reads-only\n";
     std::thread cmd_thread;
     if (have_writer) {
@@ -575,6 +687,7 @@ int main(int argc, char** argv) {
       ConditionSeq active;
       ws->wait(active, poll);      // RETCODE_TIMEOUT when idle -- fine, just re-loop
       away_status.poll();          // refresh true away state before printing
+      alerts.poll();               // refresh active alerts before printing
       take_and_print();
       away.poll_echo();            // debug (LENNOX_DEBUG_AWAY): log device away echo
       if (debug_topics) dump_publications(dp, seen_pubs);  // enumerate device topics

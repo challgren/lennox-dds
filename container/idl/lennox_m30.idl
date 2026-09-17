@@ -285,6 +285,47 @@ module LxManualAwayStatusIDL {
     };
 };
 
+// -----------------------------------------------------------------------------
+// Alerts -- the device publishes active faults on "LCC Alert Active" and clear
+// events on "LCC Alert Cleared", each carrying a nested LxAlertIDL::alert. We
+// declare a SUBSET of the app's 20-field `alert` (the useful fields only);
+// @mutable + @autoid(HASH) lets the reader skip members it doesn't declare, and
+// members match by name hash -- so the field NAMES must match the app exactly.
+// -----------------------------------------------------------------------------
+module LxAlertIDL {
+    @autoid(HASH) @mutable @nested(TRUE)
+    struct alert {
+        boolean          isStillActive;    // still active vs. resolved
+        unsigned long    code;             // alert/fault code
+        unsigned long    equipmentType;    // which equipment raised it
+        unsigned long    count;            // occurrence count
+        string           timestampFirst;   // first seen
+        string           timestampLast;    // last seen
+        string           userMessage;      // human-readable text
+        unsigned long    validFlag;
+    };
+};
+
+module LxAlertActiveIDL {
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct alertActive {
+        @key unsigned long      id;          // alert instance id (KEY)
+        @key string             sysID;       // (KEY)
+        LxAlertIDL::alert        active;      // the alert payload
+        unsigned long           validFlag;
+    };
+};
+
+module LxAlertClearedIDL {
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct alertCleared {
+        @key unsigned long      id;          // cleared alert id (KEY)
+        @key string             sysID;       // (KEY)
+        LxAlertIDL::alert        cleared;     // the cleared alert payload
+        unsigned long           validFlag;
+    };
+};
+
 // ---------------------------------------------------------------------------
 // LxScheduleExceptionIDL  --  schedule override/exception (hold) definition
 // topic literal (TOPIC_SCHEDULE_EXCEPTION) present
