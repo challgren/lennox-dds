@@ -1,0 +1,36 @@
+name: release
+
+# Push a version tag (e.g. `git tag v0.1.6 && git push origin v0.1.6`) to cut a
+# GitHub Release. The notes are the matching section from lennox_dds/CHANGELOG.md,
+# so tags/releases stay in sync with the add-on's changelog.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract changelog section for this tag
+        id: notes
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          # print lines under "## <ver>" up to the next "## " heading
+          awk -v hdr="## $ver" '
+            $0 == hdr {grab=1; next}
+            /^## / {if (grab) exit}
+            grab {print}
+          ' lennox_dds/CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "See CHANGELOG.md." > notes.md; fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.notes.outputs.version }}"
+          body_path: notes.md

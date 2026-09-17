@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6
+
+- Fix the thermostat card showing a range (e.g. `66–76`) in **cool** mode — the
+  heat setpoint was bleeding in as the low. The `lennox_dds` integration now shows
+  a single setpoint in heat/cool and a range only in heat_cool.
+- _Integration change:_ the add-on image is unchanged from 0.1.5; update the
+  companion `lennox_dds` custom integration to get this fix.
+
 ## 0.1.5
 
 - **MQTT control**: publish HA-climate command topics
