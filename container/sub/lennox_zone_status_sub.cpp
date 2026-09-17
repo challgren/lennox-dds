@@ -204,6 +204,17 @@ static void print_sample_json(const ZS::zoneStatus& z) {
   o << ",\"tempOperation\":" << (int)z.tempOperation;
   o << ",\"humOperation\":" << (int)z.humOperation;
   o << ",\"fan\":" << (z.fan ? "true" : "false");
+  // status flags (meaningful iff the matching ZoneStatus_Valid_* bit is set;
+  // e.g. allergenDefender=256, ventilation=512, aux=1024, ssr=2048, defrost=4096,
+  // heatCoast=8192, coolCoast=16384). Streamed for all devices; the HA integration
+  // only surfaces the ones the device marks valid.
+  o << ",\"allergenDefender\":" << (z.allergenDefender ? "true" : "false");
+  o << ",\"ventilation\":" << (z.ventilation ? "true" : "false");
+  o << ",\"aux\":" << (z.aux ? "true" : "false");
+  o << ",\"ssr\":" << (z.ssr ? "true" : "false");
+  o << ",\"defrost\":" << (z.defrost ? "true" : "false");
+  o << ",\"heatCoast\":" << (z.heatCoast ? "true" : "false");
+  o << ",\"coolCoast\":" << (z.coolCoast ? "true" : "false");
   o << ",\"tempStatus\":" << (int)z.tempStatus;
   o << ",\"humidityStatus\":" << (int)z.humidityStatus;
   o << ",\"balancePoint\":" << (int)z.balancePoint;

@@ -40,3 +40,17 @@ TEMP_OPERATION_TO_ACTION = {
 # Lx_PeriodIDL::fanmodeEnum  ->  HA fan mode strings
 FAN_MODE_TO_STR = {1: "auto", 2: "circulate", 3: "on", 4: "auto_circulate"}
 STR_TO_FAN_MODE = {v: k for k, v in FAN_MODE_TO_STR.items()}
+
+# LxZoneStatusIDL zoneStatus boolean status flags -> binary sensors. Each is only
+# created for a zone once its ZoneStatus_Valid_* bit is seen set, so devices
+# without the feature (e.g. the base M30) don't get a phantom sensor.
+# (json key, friendly name, ZoneStatus_Valid_* bit, mdi icon)
+STATUS_BINARY_SENSORS = [
+    ("allergenDefender", "Allergen Defender", 256, "mdi:air-filter"),
+    ("ventilation", "Ventilation", 512, "mdi:fan"),
+    ("aux", "Aux Heat", 1024, "mdi:heating-coil"),
+    ("ssr", "Smooth Setback Recovery", 2048, "mdi:clock-outline"),
+    ("defrost", "Defrost", 4096, "mdi:snowflake-melt"),
+    ("heatCoast", "Heat Coast", 8192, "mdi:radiator"),
+    ("coolCoast", "Cool Coast", 16384, "mdi:snowflake"),
+]

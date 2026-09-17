@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.8
+
+- **Allergen Defender + more status flags**: the bridge now streams the full
+  `zoneStatus` (allergen defender, ventilation, aux heat, defrost, smooth-setback
+  recovery, heat/cool coast). The integration exposes each as a **binary sensor**,
+  created only when your device marks the flag valid — so unsupported models (e.g.
+  the base M30) show nothing.
+- **Diagnostics**: Settings → Devices & Services → Lennox iComfort (DDS) → ⋮ →
+  **Download diagnostics** exports the raw samples (sysID redacted), so
+  unrecognized fields on other models are easy to spot and report.
+- **Icons**: proper add-on icon + logo; `brands/` has ready-to-submit files for a
+  home-assistant/brands PR (integration icon in Devices & Services).
+
 ## 0.1.7
 
 - The companion **`lennox_dds` integration is now in this repo** (under
