@@ -18,6 +18,12 @@ cat >> ./lennox_m30.idl <<'IDL'
 #pragma DCPS_DATA_TYPE "LxManualAwayStatusIDL::manualAwayStatus"
 #pragma DCPS_DATA_TYPE "LxAlertActiveIDL::alertActive"
 #pragma DCPS_DATA_TYPE "LxAlertClearedIDL::alertCleared"
+#pragma DCPS_DATA_TYPE "LxReminderStatusIDL::reminder"
+#pragma DCPS_DATA_TYPE "LxWeatherStatusIDL::weatherStatus"
+#pragma DCPS_DATA_TYPE "LxSmartAwayStatusIDL::smartAway"
+#pragma DCPS_DATA_TYPE "Lx_SystemStatusIDL::systemStatus"
+#pragma DCPS_DATA_TYPE "LxOcstEventStatusIDL::ocstEventStatus"
+#pragma DCPS_DATA_TYPE "LxOcstEnrollmentStatusIDL::ocstEnrollmentStatus"
 IDL
 
 "$ACE_ROOT/bin/mwc.pl" -type gnuace lennox_sub.mwc

@@ -7,7 +7,9 @@ the Lennox "prod4"/v4 cloud** (notably the **iComfort M30**), which the classic
 longer reach.
 
 - ✅ Live climate + temperature/humidity, **local push**
-- ✅ Control: setpoints, HVAC mode, fan, and **Away**
+- ✅ Control: setpoints, HVAC mode, fan, and **Away** (true state, reflected back)
+- ✅ **Outdoor temperature + weather** (humidity, wind), **HVAC fault alerts**,
+  **filter/maintenance reminders**, and **Smart Away** — as HA sensors
 - ✅ Read-only status flags (allergen defender, ventilation, aux heat, defrost, …)
   surfaced as binary sensors when your model reports them
 - ✅ No manual certificates — the add-on provisions itself from your Lennox login

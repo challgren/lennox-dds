@@ -36,11 +36,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                     continue
                 known.add(uid)
                 new.append(M30StatusBinarySensor(coordinator, key, field, name, icon))
-            # one alert sensor per system (per sysID), created once alerts stream
+            # per-system sensors, created once their source field streams
             sys_id = key.partition(":")[0]
-            if sys_id not in known_alerts and "alerts" in sample:
-                known_alerts.add(sys_id)
+            if (sys_id, "alert") not in known_alerts and "alerts" in sample:
+                known_alerts.add((sys_id, "alert"))
                 new.append(M30AlertBinarySensor(coordinator, sys_id))
+            if (sys_id, "reminder") not in known_alerts and "reminders" in sample:
+                known_alerts.add((sys_id, "reminder"))
+                new.append(M30ReminderBinarySensor(coordinator, sys_id))
+            if (sys_id, "smartaway") not in known_alerts and sample.get("smartAwayEnabled") is not None:
+                known_alerts.add((sys_id, "smartaway"))
+                new.append(M30SmartAwayBinarySensor(coordinator, sys_id))
+            if (sys_id, "dr") not in known_alerts and sample.get("drEvent") is not None:
+                known_alerts.add((sys_id, "dr"))
+                new.append(M30DemandResponseBinarySensor(coordinator, sys_id))
         if new:
             async_add_entities(new)
 
@@ -110,4 +119,103 @@ class M30AlertBinarySensor(CoordinatorEntity[M30BridgeCoordinator], BinarySensor
             "codes": [a.get("code") for a in alerts],
             "messages": [a.get("message") for a in alerts],
             "alerts": alerts,
+        }
+
+
+def _first_sample_for(coordinator, sys_id: str) -> dict:
+    for key, sample in (coordinator.data or {}).items():
+        if key.partition(":")[0] == sys_id:
+            return sample
+    return {}
+
+
+class M30ReminderBinarySensor(CoordinatorEntity[M30BridgeCoordinator], BinarySensorEntity):
+    """Filter/maintenance reminders (from LCC Reminder Status)."""
+    _attr_has_entity_name = True
+    _attr_name = "Maintenance Due"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:air-filter"
+
+    def __init__(self, coordinator: M30BridgeCoordinator, sys_id: str) -> None:
+        super().__init__(coordinator)
+        self._sys_id = sys_id
+        self._attr_unique_id = f"lennox_dds_{sys_id}_maintenance"
+        self._attr_device_info = {"identifiers": {(DOMAIN, sys_id)}}
+
+    def _reminders(self) -> list:
+        return _first_sample_for(self.coordinator, self._sys_id).get("reminders") or []
+
+    @property
+    def available(self) -> bool:
+        return bool(_first_sample_for(self.coordinator, self._sys_id))
+
+    @property
+    def is_on(self):
+        return any(r.get("expired") for r in self._reminders())
+
+    @property
+    def extra_state_attributes(self):
+        rems = self._reminders()
+        pcts = [r.get("remainingPct") for r in rems if r.get("remainingPct") is not None]
+        return {
+            "reminder_count": len(rems),
+            "min_remaining_pct": min(pcts) if pcts else None,
+            "reminders": rems,
+        }
+
+
+class M30SmartAwayBinarySensor(CoordinatorEntity[M30BridgeCoordinator], BinarySensorEntity):
+    """Smart Away (geofence) enabled state (from LCC Smart Away Status)."""
+    _attr_has_entity_name = True
+    _attr_name = "Smart Away"
+    _attr_icon = "mdi:map-marker-radius"
+
+    def __init__(self, coordinator: M30BridgeCoordinator, sys_id: str) -> None:
+        super().__init__(coordinator)
+        self._sys_id = sys_id
+        self._attr_unique_id = f"lennox_dds_{sys_id}_smart_away"
+        self._attr_device_info = {"identifiers": {(DOMAIN, sys_id)}}
+
+    @property
+    def available(self) -> bool:
+        return _first_sample_for(self.coordinator, self._sys_id).get("smartAwayEnabled") is not None
+
+    @property
+    def is_on(self):
+        return bool(_first_sample_for(self.coordinator, self._sys_id).get("smartAwayEnabled"))
+
+
+class M30DemandResponseBinarySensor(CoordinatorEntity[M30BridgeCoordinator], BinarySensorEntity):
+    """Utility demand-response (OCST/OpenADR) event: on during an active event."""
+    _attr_has_entity_name = True
+    _attr_name = "Demand Response Event"
+    _attr_icon = "mdi:transmission-tower"
+
+    def __init__(self, coordinator: M30BridgeCoordinator, sys_id: str) -> None:
+        super().__init__(coordinator)
+        self._sys_id = sys_id
+        self._attr_unique_id = f"lennox_dds_{sys_id}_dr_event"
+        self._attr_device_info = {"identifiers": {(DOMAIN, sys_id)}}
+
+    def _dr(self) -> dict:
+        return _first_sample_for(self.coordinator, self._sys_id).get("drEvent") or {}
+
+    @property
+    def available(self) -> bool:
+        return _first_sample_for(self.coordinator, self._sys_id).get("drEvent") is not None
+
+    @property
+    def is_on(self):
+        return bool(self._dr().get("active"))
+
+    @property
+    def extra_state_attributes(self):
+        dr = self._dr()
+        enroll = _first_sample_for(self.coordinator, self._sys_id).get("drEnrollment") or {}
+        return {
+            "pending": dr.get("pending"),
+            "allow_opt_out": dr.get("allowOptOut"),
+            "start": dr.get("start"),
+            "end": dr.get("end"),
+            "enrolled": enroll.get("enrolled"),
         }

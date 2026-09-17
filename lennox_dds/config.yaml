@@ -15,7 +15,7 @@
 #      config at /config/lennox_dds/security/ (mapped read-only; see security_dir).
 # Nothing secret is baked into the image.
 name: Lennox iComfort DDS Bridge
-version: "0.1.14"
+version: "0.1.15"
 slug: lennox_dds
 description: OpenDDS sidecar bridging Lennox iComfort (M30 / prod4) realtime data to Home Assistant.
 url: https://github.com/challgren/lennox-dds
@@ -41,8 +41,6 @@ options:
   lennox_email: ""
   lennox_password: ""
   home_id: ""
-  domain: 0
-  topic: "LCC Zone Status"
   security_dir: "/homeassistant_config/lennox_dds/security"
   dcps_debug: 0
   debug: false
@@ -53,8 +51,8 @@ schema:
   lennox_email: "str?"        # Option A: Lennox account email (auto-provision)
   lennox_password: "password?" # Option A: Lennox account password
   home_id: "str?"             # Option B only: login homeId = DDS partition; auto with creds
-  domain: int
-  topic: str
+  # domain (0) and topic ("LCC Zone Status") are fixed by the protocol and no
+  # longer configurable -- the bridge reads many hardcoded companion topics.
   security_dir: "str?"
   dcps_debug: int
   debug: bool                # log every raw sample to the add-on log (for bug reports)

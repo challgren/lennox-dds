@@ -49,6 +49,12 @@ namespace MAS = LxManualAwayStatusIDL;
 namespace AA = LxAlertActiveIDL;
 namespace AC = LxAlertClearedIDL;
 namespace AL = LxAlertIDL;
+namespace RS = LxReminderStatusIDL;
+namespace WX = LxWeatherStatusIDL;
+namespace SA = LxSmartAwayStatusIDL;
+namespace SY = Lx_SystemStatusIDL;
+namespace OE = LxOcstEventStatusIDL;
+namespace ON = LxOcstEnrollmentStatusIDL;
 
 // Latest manual-away STATE per sysID, from the "LCC Manual Away Status" topic.
 // Merged into every zoneStatus sample as "manualAway" so the integration's Away
@@ -59,6 +65,14 @@ static std::map<std::string, int> g_away_status;
 // Active alerts per sysID: id -> pre-rendered JSON object. Updated by the alert
 // readers; merged into every zoneStatus sample as "alerts":[...].
 static std::map<std::string, std::map<unsigned long, std::string>> g_alerts;
+
+// Other status topics merged per sysID into the zoneStatus sample.
+static std::map<std::string, std::map<unsigned long, std::string>> g_reminders; // id->json
+static std::map<std::string, std::string> g_weather;   // json object
+static std::map<std::string, std::string> g_system;    // json object
+static std::map<std::string, int> g_smartaway;         // -1 unknown / 0 / 1 enabled
+static std::map<std::string, std::string> g_ocst_event;   // json (demand-response event)
+static std::map<std::string, std::string> g_ocst_enroll;  // json (DR enrollment)
 
 // Period validFlag bits (research/idl/lennox_m30.idl :: Lx_PeriodIDL).
 static const unsigned PERIOD_VALID_SYSTEMMODE = 8;
@@ -481,6 +495,208 @@ struct AlertReader {
   }
 };
 
+// Shared reader QoS for the per-sysID status topics (RELIABLE + TRANSIENT_LOCAL
+// so we get the last-published state on join; lenient type coercion for subsets).
+static void status_dr_qos(DataReaderQos& dr) {
+  dr.reliability.kind = RELIABLE_RELIABILITY_QOS;
+  dr.durability.kind  = TRANSIENT_LOCAL_DURABILITY_QOS;
+  dr.representation.value.length(1);
+  dr.representation.value[0] = XCDR2_DATA_REPRESENTATION;
+  dr.type_consistency.kind = ALLOW_TYPE_COERCION;
+  dr.type_consistency.ignore_member_names = true;
+  dr.type_consistency.prevent_type_widening = false;
+  dr.type_consistency.force_type_validation = false;
+}
+
+// Reminders (LCC Reminder Status) -> g_reminders[sysID][id].
+struct ReminderReader {
+  Subscriber_var sub; RS::reminderDataReader_var r;
+  bool init(DomainParticipant_var& dp, const std::string& part) {
+    RS::reminderTypeSupport_var ts = new RS::reminderTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg reminder failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var t = dp->create_topic("LCC Reminder Status", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t) { std::cerr << "create_topic(reminder) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!part.empty()) { sq.partition.name.length(1); sq.partition.name[0] = part.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); status_dr_qos(dr);
+    DataReader_var dv = sub->create_datareader(t, dr, 0, 0); if (!dv) return false;
+    r = RS::reminderDataReader::_narrow(dv); return !!r;
+  }
+  void poll() {
+    if (!r) return;
+    RS::reminderSeq d; SampleInfoSeq inf;
+    if (r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i) {
+      if (!inf[i].valid_data) continue;
+      const auto& st = d[i].status;
+      std::string exp(st.reminderExpiryTime ? (const char*)st.reminderExpiryTime : "");
+      // skip empty/inactive reminder slots (no life used, not expired, no expiry).
+      const bool inactive = !st.reminderExpired && st.reminderRemainingPct == 0 &&
+                            (exp.empty() || exp == "0");
+      if (inactive) { g_reminders[std::string(d[i].sysID)].erase(d[i].id); continue; }
+      std::ostringstream o;
+      o << "{\"id\":" << d[i].id
+        << ",\"remainingPct\":" << st.reminderRemainingPct
+        << ",\"expired\":" << (st.reminderExpired ? "true" : "false")
+        << ",\"expiry\":\"" << json_escape(st.reminderExpiryTime) << "\"}";
+      g_reminders[std::string(d[i].sysID)][d[i].id] = o.str();
+    }
+  }
+};
+
+// Weather (LCC Weather Status) -> g_weather[sysID].
+struct WeatherReader {
+  Subscriber_var sub; WX::weatherStatusDataReader_var r;
+  bool init(DomainParticipant_var& dp, const std::string& part) {
+    WX::weatherStatusTypeSupport_var ts = new WX::weatherStatusTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg weatherStatus failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var t = dp->create_topic("LCC Weather Status", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t) { std::cerr << "create_topic(weather) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!part.empty()) { sq.partition.name.length(1); sq.partition.name[0] = part.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); status_dr_qos(dr);
+    DataReader_var dv = sub->create_datareader(t, dr, 0, 0); if (!dv) return false;
+    r = WX::weatherStatusDataReader::_narrow(dv); return !!r;
+  }
+  void poll() {
+    if (!r) return;
+    WX::weatherStatusSeq d; SampleInfoSeq inf;
+    if (r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i) {
+      if (!inf[i].valid_data) continue;
+      std::ostringstream o;
+      o << "{\"city\":\"" << json_escape(d[i].city) << "\",\"state\":\"" << json_escape(d[i].state)
+        << "\",\"humidity\":" << d[i].env.humidity << ",\"windSpeed\":" << d[i].env.windSpeed
+        << ",\"cloudCoverage\":" << d[i].env.cloudCoverage;
+      // live conditions (weather-service value the M30 actually displays)
+      if (d[i].current.length() > 0) {
+        const auto& c = d[i].current[0];
+        o << ",\"temperature\":" << c.temperature
+          << ",\"temperatureHigh\":" << c.temperatureHigh
+          << ",\"temperatureLow\":" << c.temperatureLow
+          << ",\"condition\":\"" << json_escape(c.iconDescription) << "\"";
+      }
+      o << "}";
+      g_weather[std::string(d[i].sysID)] = o.str();
+    }
+  }
+};
+
+// Smart Away (LCC Smart Away Status) -> g_smartaway[sysID] = config.enabled.
+struct SmartAwayReader {
+  Subscriber_var sub; SA::smartAwayDataReader_var r;
+  bool init(DomainParticipant_var& dp, const std::string& part) {
+    SA::smartAwayTypeSupport_var ts = new SA::smartAwayTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg smartAway failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var t = dp->create_topic("LCC Smart Away Status", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t) { std::cerr << "create_topic(smartAway) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!part.empty()) { sq.partition.name.length(1); sq.partition.name[0] = part.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); status_dr_qos(dr);
+    DataReader_var dv = sub->create_datareader(t, dr, 0, 0); if (!dv) return false;
+    r = SA::smartAwayDataReader::_narrow(dv); return !!r;
+  }
+  void poll() {
+    if (!r) return;
+    SA::smartAwaySeq d; SampleInfoSeq inf;
+    if (r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i)
+      if (inf[i].valid_data) g_smartaway[std::string(d[i].sysID)] = d[i].config.enabled ? 1 : 0;
+  }
+};
+
+// System status (LCC System Status) -> g_system[sysID] (outdoor temp, zones).
+struct SystemReader {
+  Subscriber_var sub; SY::systemStatusDataReader_var r;
+  bool init(DomainParticipant_var& dp, const std::string& part) {
+    SY::systemStatusTypeSupport_var ts = new SY::systemStatusTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg systemStatus failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var t = dp->create_topic("LCC System Status", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t) { std::cerr << "create_topic(system) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!part.empty()) { sq.partition.name.length(1); sq.partition.name[0] = part.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); status_dr_qos(dr);
+    DataReader_var dv = sub->create_datareader(t, dr, 0, 0); if (!dv) return false;
+    r = SY::systemStatusDataReader::_narrow(dv); return !!r;
+  }
+  void poll() {
+    if (!r) return;
+    SY::systemStatusSeq d; SampleInfoSeq inf;
+    if (r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i) {
+      if (!inf[i].valid_data) continue;
+      std::ostringstream o;
+      o << "{\"outdoorTemperature\":" << d[i].outdoorTemperature
+        << ",\"outdoorTemperatureC\":" << d[i].outdoorTemperatureC
+        << ",\"numberOfZones\":" << d[i].numberOfZones
+        << ",\"singleSetpointMode\":" << (d[i].singleSetpointMode ? "true" : "false")
+        << ",\"wideSetpointRange\":" << (d[i].wideSetpointRange ? "true" : "false") << "}";
+      g_system[std::string(d[i].sysID)] = o.str();
+    }
+  }
+};
+
+// OCST demand-response: event status + enrollment status.
+struct OcstReader {
+  Subscriber_var sub; OE::ocstEventStatusDataReader_var er; ON::ocstEnrollmentStatusDataReader_var nr;
+  bool init(DomainParticipant_var& dp, const std::string& part) {
+    OE::ocstEventStatusTypeSupport_var ts1 = new OE::ocstEventStatusTypeSupportImpl();
+    ON::ocstEnrollmentStatusTypeSupport_var ts2 = new ON::ocstEnrollmentStatusTypeSupportImpl();
+    if (ts1->register_type(dp, "") != RETCODE_OK || ts2->register_type(dp, "") != RETCODE_OK) {
+      std::cerr << "reg ocst types failed\n"; return false; }
+    CORBA::String_var tn1 = ts1->get_type_name(), tn2 = ts2->get_type_name();
+    Topic_var t1 = dp->create_topic("LCC Ocst Event Status", tn1, TOPIC_QOS_DEFAULT, 0, 0);
+    Topic_var t2 = dp->create_topic("LCC Ocst Enrollment Status", tn2, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t1 || !t2) { std::cerr << "create_topic(ocst) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!part.empty()) { sq.partition.name.length(1); sq.partition.name[0] = part.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); status_dr_qos(dr);
+    DataReader_var r1 = sub->create_datareader(t1, dr, 0, 0);
+    DataReader_var r2 = sub->create_datareader(t2, dr, 0, 0);
+    if (!r1 || !r2) { std::cerr << "create_datareader(ocst) failed\n"; return false; }
+    er = OE::ocstEventStatusDataReader::_narrow(r1);
+    nr = ON::ocstEnrollmentStatusDataReader::_narrow(r2);
+    return !!er && !!nr;
+  }
+  void poll() {
+    if (er) {
+      OE::ocstEventStatusSeq d; SampleInfoSeq inf;
+      if (er->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) == RETCODE_OK)
+        for (CORBA::ULong i = 0; i < d.length(); ++i) {
+          if (!inf[i].valid_data) continue;
+          std::ostringstream o;
+          o << "{\"active\":" << (d[i].showEventStatusActive ? "true" : "false")
+            << ",\"pending\":" << (d[i].showEventStatusPending ? "true" : "false")
+            << ",\"allowOptOut\":" << (d[i].allowUserOptOut ? "true" : "false")
+            << ",\"start\":\"" << json_escape(d[i].eventStartTime) << "\""
+            << ",\"end\":\"" << json_escape(d[i].eventEndTime) << "\"}";
+          g_ocst_event[std::string(d[i].sysID)] = o.str();
+        }
+    }
+    if (nr) {
+      ON::ocstEnrollmentStatusSeq d; SampleInfoSeq inf;
+      if (nr->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) == RETCODE_OK)
+        for (CORBA::ULong i = 0; i < d.length(); ++i) {
+          if (!inf[i].valid_data) continue;
+          std::ostringstream o;
+          o << "{\"supported\":" << (d[i].isAHRI1380DREnrollmentSupported ? "true" : "false")
+            << ",\"enrolled\":" << (d[i].isAHRI1380DRProgramSelected ? "true" : "false")
+            << ",\"registrationID\":\"" << json_escape(d[i].registrationID) << "\"}";
+          g_ocst_enroll[std::string(d[i].sysID)] = o.str();
+        }
+    }
+  }
+};
+
 static void print_sample_json(const ZS::zoneStatus& z) {
   std::ostringstream o;
   o << "{";
@@ -542,6 +758,32 @@ static void print_sample_json(const ZS::zoneStatus& z) {
       for (const auto& kv : it->second) { if (!first) o << ","; o << kv.second; first = false; }
     }
     o << "]";
+  }
+  // reminders (per sysID)
+  {
+    o << ",\"reminders\":[";
+    auto it = g_reminders.find(std::string(z.sysID));
+    if (it != g_reminders.end()) {
+      bool first = true;
+      for (const auto& kv : it->second) { if (!first) o << ","; o << kv.second; first = false; }
+    }
+    o << "]";
+  }
+  // weather / system objects, smart-away flag (per sysID); null/absent until seen
+  {
+    std::string sys(z.sysID);
+    auto w = g_weather.find(sys);
+    o << ",\"weather\":" << (w != g_weather.end() ? w->second : std::string("null"));
+    auto s = g_system.find(sys);
+    o << ",\"system\":" << (s != g_system.end() ? s->second : std::string("null"));
+    auto sa = g_smartaway.find(sys);
+    if (sa == g_smartaway.end() || sa->second < 0) o << ",\"smartAwayEnabled\":null";
+    else o << ",\"smartAwayEnabled\":" << (sa->second ? "true" : "false");
+    // demand-response (OCST): event + enrollment
+    auto oe = g_ocst_event.find(sys);
+    o << ",\"drEvent\":" << (oe != g_ocst_event.end() ? oe->second : std::string("null"));
+    auto on = g_ocst_enroll.find(sys);
+    o << ",\"drEnrollment\":" << (on != g_ocst_enroll.end() ? on->second : std::string("null"));
   }
   o << "}";
   std::cout << o.str() << std::endl;
@@ -663,12 +905,27 @@ int main(int argc, char** argv) {
     static AwayWriter away;
     static AwayStatusReader away_status;
     static AlertReader alerts;
+    static ReminderReader reminders;
+    static WeatherReader weather;
+    static SmartAwayReader smart_away;
+    static SystemReader system_status;
+    static OcstReader ocst;
     const bool have_writer = sched.init(dp, partition);
     away.init(dp, partition);   // best-effort; away control is optional
     if (away_status.init(dp, partition))  // true away-state readback
       std::cerr << "[bridge] away-status reader up on 'LCC Manual Away Status'\n";
     if (alerts.init(dp, partition))       // active fault alerts
       std::cerr << "[bridge] alert readers up on 'LCC Alert Active/Cleared'\n";
+    if (reminders.init(dp, partition))
+      std::cerr << "[bridge] reminder reader up on 'LCC Reminder Status'\n";
+    if (weather.init(dp, partition))
+      std::cerr << "[bridge] weather reader up on 'LCC Weather Status'\n";
+    if (smart_away.init(dp, partition))
+      std::cerr << "[bridge] smart-away reader up on 'LCC Smart Away Status'\n";
+    if (system_status.init(dp, partition))
+      std::cerr << "[bridge] system reader up on 'LCC System Status'\n";
+    if (ocst.init(dp, partition))
+      std::cerr << "[bridge] ocst reader up on 'LCC Ocst Event/Enrollment Status'\n";
     if (!have_writer) std::cerr << "[bridge] control writer init failed; reads-only\n";
     std::thread cmd_thread;
     if (have_writer) {
@@ -688,6 +945,11 @@ int main(int argc, char** argv) {
       ws->wait(active, poll);      // RETCODE_TIMEOUT when idle -- fine, just re-loop
       away_status.poll();          // refresh true away state before printing
       alerts.poll();               // refresh active alerts before printing
+      reminders.poll();
+      weather.poll();
+      smart_away.poll();
+      system_status.poll();
+      ocst.poll();
       take_and_print();
       away.poll_echo();            // debug (LENNOX_DEBUG_AWAY): log device away echo
       if (debug_topics) dump_publications(dp, seen_pubs);  // enumerate device topics

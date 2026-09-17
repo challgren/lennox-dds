@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.15
+
+Four new data sources from the thermostat's status topics (all validated live):
+
+- **Outdoor temperature + weather**: a new **Outdoor Temperature** sensor (from
+  the weather-service value the M30 displays, falling back to the outdoor-unit
+  sensor), plus **Outdoor Humidity** and **Wind Speed**, and city/state/condition.
+- **Filter/maintenance reminders**: a **Maintenance Due** binary sensor (on when a
+  reminder has expired), with each reminder's % life remaining as attributes.
+  Empty reminder slots are filtered out.
+- **Smart Away**: a **Smart Away** binary sensor (geofence away enabled).
+- **Demand response** (utility OpenADR / AHRI 1380): a **Demand Response Event**
+  binary sensor — on during an active utility peak event, with pending/opt-out/
+  start/end and enrollment as attributes.
+- _Config:_ removed the `topic` and `domain` options — they're fixed by the
+  protocol now that the bridge reads many hardcoded status topics.
+
 ## 0.1.14
 
 - **HVAC alerts.** The bridge now subscribes to the `LCC Alert Active` /

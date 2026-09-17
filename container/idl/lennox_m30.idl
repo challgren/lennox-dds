@@ -326,6 +326,132 @@ module LxAlertClearedIDL {
     };
 };
 
+// -----------------------------------------------------------------------------
+// Reminders -- filter/maintenance reminders on "LCC Reminder Status".
+// reminder{id,sysID,reminderStatus status,reminderConfig config,validFlag}; we
+// take `status` (skip config). Subset of the nested reminderStatus.
+// -----------------------------------------------------------------------------
+module LxReminderStatusIDL {
+    @autoid(HASH) @mutable @nested(TRUE)
+    struct reminderStatus {
+        boolean          isValid;
+        unsigned long    reminderRemainingPct;   // % life remaining
+        boolean          reminderExpired;
+        string           reminderSetTime;
+        string           reminderExpiryTime;
+        unsigned long    validFlag;
+    };
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct reminder {
+        @key unsigned long          id;          // reminder id (KEY)
+        @key string                 sysID;       // (KEY)
+        LxReminderStatusIDL::reminderStatus status;
+        unsigned long               validFlag;
+    };
+};
+
+// -----------------------------------------------------------------------------
+// Weather -- outdoor conditions on "LCC Weather Status". We take the scalar env
+// (humidity/wind/cloud) + city/state; the forecast[] arrays are skipped (@mutable).
+// -----------------------------------------------------------------------------
+module LxWeatherStatusIDL {
+    @autoid(HASH) @mutable @nested(TRUE)
+    struct weatherEnv {
+        double           humidity;
+        double           windSpeed;
+        double           cloudCoverage;
+        unsigned long    validFlag;
+    };
+    // A forecast entry (subset). `current` holds the live conditions the M30
+    // actually displays as "outdoor temp" -- the weather-service value, which is
+    // more accurate than systemStatus.outdoorTemperature (the outdoor-unit sensor).
+    @autoid(HASH) @mutable @nested(TRUE)
+    struct forecast {
+        double           temperature;      // F  (displayed outdoor temp)
+        double           temperatureC;     // C
+        double           temperatureHigh;
+        double           temperatureLow;
+        string           iconDescription;  // e.g. "Partly Cloudy"
+        unsigned long    iconId;
+        unsigned long    validFlag;
+    };
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct weatherStatus {
+        @key string             sysID;       // (KEY)
+        boolean                 isValid;
+        string                  city;
+        string                  state;
+        sequence<LxWeatherStatusIDL::forecast> current;   // live conditions
+        LxWeatherStatusIDL::weatherEnv env;
+        unsigned long           validFlag;
+    };
+};
+
+// -----------------------------------------------------------------------------
+// Smart Away (geofence) -- on "LCC Smart Away Status". We take config.enabled
+// (skip the enum-heavy awayStatus + participant arrays via @mutable).
+// -----------------------------------------------------------------------------
+module LxSmartAwayStatusIDL {
+    @autoid(HASH) @mutable @nested(TRUE)
+    struct awayConfig {
+        boolean          enabled;
+    };
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct smartAway {
+        @key string             sysID;       // (KEY)
+        LxSmartAwayStatusIDL::awayConfig config;
+        unsigned long           validFlag;
+    };
+};
+
+// -----------------------------------------------------------------------------
+// System status -- on "LCC System Status". Scalar subset (outdoor temp, zones);
+// the enum fields (zoningMode/rsbusMode/outdoorTemperatureStatus) are skipped.
+// -----------------------------------------------------------------------------
+module Lx_SystemStatusIDL {
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct systemStatus {
+        @key string             sysID;       // (KEY)
+        double                  outdoorTemperature;   // F (outdoor-unit sensor; lags)
+        double                  outdoorTemperatureC;  // C
+        unsigned long           numberOfZones;
+        boolean                 singleSetpointMode;
+        boolean                 wideSetpointRange;
+        string                  currentTime;
+        unsigned long           validFlag;
+    };
+};
+
+// -----------------------------------------------------------------------------
+// OCST -- utility demand-response (OpenADR / AHRI 1380). Event = the utility
+// asking to shed load during a peak window (with opt-out). Enrollment = whether
+// the system is signed up. Enum-heavy in the app; we take the boolean/string subset.
+// -----------------------------------------------------------------------------
+module LxOcstEventStatusIDL {
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct ocstEventStatus {
+        @key unsigned long      id;          // (KEY)
+        @key string             sysID;       // (KEY)
+        boolean                 showEventStatusActive;
+        boolean                 showEventStatusPending;
+        boolean                 allowUserOptOut;
+        string                  eventStartTime;
+        string                  eventEndTime;
+        unsigned long           validFlag;
+    };
+};
+
+module LxOcstEnrollmentStatusIDL {
+    @autoid(HASH) @mutable @nested(FALSE)
+    struct ocstEnrollmentStatus {
+        @key string             sysID;       // (KEY)
+        boolean                 isAHRI1380DREnrollmentSupported;
+        boolean                 isAHRI1380DRProgramSelected;
+        string                  registrationID;
+        unsigned long           validFlag;
+    };
+};
+
 // ---------------------------------------------------------------------------
 // LxScheduleExceptionIDL  --  schedule override/exception (hold) definition
 // topic literal (TOPIC_SCHEDULE_EXCEPTION) present
