@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.17 (integration only — update via HACS; add-on image unchanged)
+
+- **Optimistic setpoint/mode/fan.** The M30 can take a few minutes to apply and
+  echo a change back over the cloud/relay, during which the card kept showing the
+  *old* value — so it looked like the change failed and users retried. The climate
+  entity now reflects a set temperature / mode / fan **immediately**, then
+  reconciles with the device when it catches up (or reverts after 5 min if the
+  device never confirms). The underlying writes were already succeeding; this is
+  purely the missing UI feedback.
+
 ## 0.1.16
 
 - **Stability: clean shutdown.** The bridge no longer prints a
