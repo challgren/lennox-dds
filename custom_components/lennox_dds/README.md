@@ -24,7 +24,8 @@ No Lennox credentials live here; those are add-on options.
 | `coordinator.py` | WebSocket client to the bridge: receives samples, dispatches updates, sends control commands. |
 | `config_flow.py` | UI/discovery config flow (host/port). |
 | `climate.py` | The thermostat entity — target temperature(s), HVAC mode, fan. Includes the **optimistic overlay** (a set value shows immediately, then reconciles with the device, which can echo back slowly). |
-| `sensor.py` | Read-only sensors (temperature, humidity, outdoor temp, weather, reminders, …). |
+| `sensor.py` | Read-only sensors: temperature, humidity, outdoor temp/weather, plus **Cool Setpoint / Heat Setpoint** (both shown in every mode, so setpoint changes land in history + logbook). |
+| `number.py` | Settable **Humidify / Dehumidify Setpoint** numbers (%RH) — capability-gated (created only when the device publishes `husp`/`desp`). |
 | `binary_sensor.py` | Binary sensors (alerts / maintenance-due / away state, …). |
 | `switch.py` | Controllable switches (e.g. Away). |
 | `diagnostics.py` | Redacted diagnostics download for bug reports. |

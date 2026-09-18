@@ -1,5 +1,12 @@
 # Lennox iComfort DDS Bridge
 
+[![Open your Home Assistant instance and add the Lennox iComfort (DDS) integration via HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=challgren&repository=lennox-dds&category=integration)
+[![Open your Home Assistant instance and add the Lennox iComfort DDS Bridge add-on repository.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fchallgren%2Flennox-dds)
+
+[![GitHub release](https://img.shields.io/github/v/release/challgren/lennox-dds?include_prereleases&sort=semver)](https://github.com/challgren/lennox-dds/releases)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![Build image](https://github.com/challgren/lennox-dds/actions/workflows/build-image.yml/badge.svg)](https://github.com/challgren/lennox-dds/actions/workflows/build-image.yml)
+
 Home Assistant support for **Lennox iComfort thermostats that have been migrated to
 the Lennox "prod4"/v4 cloud** (notably the **iComfort M30**), which the classic
 [`lennoxs30`](https://github.com/PeteRager/lennoxs30) /
@@ -50,18 +57,26 @@ client, auto-wired by Supervisor discovery) turns that into entities.
 
 ## Install
 
-**1. Integration (via HACS)** — HACS → ⋮ → **Custom repositories** → add
-`https://github.com/challgren/lennox-dds` as category **Integration** → install
-**Lennox iComfort (DDS)** → **restart Home Assistant**.
+You need **both** halves: the **add-on** (the DDS bridge — requires Home Assistant
+OS / Supervised) and the **integration** (the entities — requires [HACS](https://hacs.xyz)).
+The buttons open the dialog on *your* Home Assistant.
 
-**2. Add-on** — Settings → Add-ons → Add-on Store → ⋮ → **Repositories** → add
-`https://github.com/challgren/lennox-dds` → install **Lennox iComfort DDS Bridge**,
-set **`lennox_email`** + **`lennox_password`**, and start it. It provisions the
-DDS-Security bundle and auto-derives your `home_id`. (Advanced/offline: leave those
-blank and drop your own bundle — see [`lennox_dds/README.md`](./lennox_dds).)
+**1. Add-on** &nbsp;
+[![Add the add-on repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fchallgren%2Flennox-dds)
+&nbsp;→ install **Lennox iComfort DDS Bridge**, set **`lennox_email`** +
+**`lennox_password`**, and **Start**. It provisions the DDS-Security bundle and
+auto-derives your `home_id`. *(Manual: Settings → Add-ons → Store → ⋮ →
+Repositories → add `https://github.com/challgren/lennox-dds`. Advanced/offline: leave
+the credentials blank and drop your own bundle — see [`lennox_dds/`](./lennox_dds).)*
+
+**2. Integration** &nbsp;
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=challgren&repository=lennox-dds&category=integration)
+&nbsp;→ **Download**, then **restart Home Assistant**. *(Manual: HACS → ⋮ → Custom
+repositories → add the same URL as category **Integration**.)*
 
 **3. Done** — the add-on announces itself and the integration auto-configures via
-Supervisor discovery; your climate + temperature/humidity entities appear.
+Supervisor discovery; your climate + temperature/humidity entities appear (no host
+or port to type).
 
 ## Entities
 
@@ -73,6 +88,8 @@ simply don't appear.
 | Thermostat | `climate` | setpoints, HVAC mode, fan, current temp/humidity |
 | Away | `switch` | true state from `LCC Manual Away Status`, writable |
 | Temperature / Humidity | `sensor` | per-zone `zoneStatus` |
+| Cool Setpoint / Heat Setpoint | `sensor` | active period `csp`/`hsp` — both shown in every mode, so setpoint changes land in history + the logbook |
+| Humidify / Dehumidify Setpoint | `number` | `husp`/`desp` — settable %RH targets, created only when your system has humidity control |
 | Outdoor Temperature | `sensor` | weather-service value (falls back to the outdoor-unit sensor) |
 | Outdoor Humidity / Wind Speed | `sensor` | `LCC Weather Status` |
 | Alert | `binary_sensor` (problem) | active faults from `LCC Alert Active/Cleared` (codes + messages) |
@@ -91,16 +108,17 @@ the add-on docs. Download diagnostics (⋮ on the device) for a full, redacted d
 ## Repository layout
 
 ```
-lennox_dds/     # the HA add-on (prebuilt-image manifest -> ghcr.io/challgren/lennox-dds)
-container/      # the Docker image build source (Dockerfiles, C++ subscriber, IDL,
-                #   XCDR2 interop patch, bridge server, credentialed bundle fetch)
-.github/        # CI: build-image.yml (per-commit) + build-base.yml (manual OpenDDS base)
+custom_components/lennox_dds/  # the HA integration (via HACS) — climate + sensors + numbers
+lennox_dds/                    # the HA add-on (prebuilt-image manifest -> ghcr.io/challgren/lennox-dds)
+container/                     # the Docker image build source (Dockerfiles, C++ subscriber,
+                               #   IDL, XCDR2 interop patch, bridge server, credentialed fetch)
+.github/                       # CI: build-image.yml (per-commit) + release.yml (v* tag -> release)
 ```
 
-The add-on pulls a prebuilt image (fast install, no on-server compile); CI builds and
-publishes it to GHCR. See [`container/`](./container) for the internals and the
-one interop note (the device runs an OCI-proprietary OpenDDS 3.22 `pkg-21`, so a
-from-source OpenDDS needs the `skip_sequence_dheader` XTypes patch).
+Each directory has its own README. The add-on pulls a prebuilt image (fast install,
+no on-server compile); CI builds and publishes it to GHCR. See [`container/`](./container)
+for the internals and the one interop note (the device runs an OCI-proprietary OpenDDS
+3.22 `pkg-21`, so a from-source OpenDDS needs the `skip_sequence_dheader` XTypes patch).
 
 ## Reporting a bug
 
