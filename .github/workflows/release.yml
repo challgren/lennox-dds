@@ -20,9 +20,10 @@ jobs:
         id: notes
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          # print lines under "## <ver>" up to the next "## " heading
-          awk -v hdr="## $ver" '
-            $0 == hdr {grab=1; next}
+          # print lines under the "## <ver>" heading (tolerating trailing text
+          # like "## 0.1.17 (integration only)") up to the next "## " heading
+          awk -v ver="$ver" '
+            $0 ~ ("^## " ver "([ )]|$)") {grab=1; next}
             /^## / {if (grab) exit}
             grab {print}
           ' lennox_dds/CHANGELOG.md > notes.md

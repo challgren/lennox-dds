@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.1.17 (integration only — update via HACS; add-on image unchanged)
+## 0.1.17
+
+_Integration-only — update via HACS; the add-on/bridge image is unchanged._
 
 - **Optimistic setpoint/mode/fan.** The M30 can take a few minutes to apply and
   echo a change back over the cloud/relay, during which the card kept showing the
