@@ -13,7 +13,8 @@ from homeassistant.core import HomeAssistant
 from .const import CONF_WS_URL, DOMAIN
 from .coordinator import M30BridgeCoordinator
 
-PLATFORMS = [Platform.CLIMATE, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH]
+PLATFORMS = [Platform.CLIMATE, Platform.SENSOR, Platform.BINARY_SENSOR,
+             Platform.SWITCH, Platform.NUMBER]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

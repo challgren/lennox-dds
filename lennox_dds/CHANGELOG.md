@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.20
+
+- **Humidify / Dehumidify setpoint controls.** Two new **number** entities let you
+  set the humidify and dehumidify targets (%RH) from Home Assistant, like the old
+  lennoxs30 integration. The bridge writes them through the same manual-slot
+  scheduleUpdate period as the temperature setpoints. They're **capability-gated** —
+  only created when your system actually publishes those fields, so homes without
+  humidity control won't see them.
+
 ## 0.1.19
 
 _Integration-only — update via HACS; the add-on/bridge image is unchanged._

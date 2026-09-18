@@ -382,6 +382,7 @@ SCHEDULE_OVERRIDE_BASE = 16
 def _build_set_line(cmd: dict) -> str | None:
     """Translate a control command dict into a bridge stdin line:
         SET <sysID> <scheduleId> [mode=<int>] [csp=<F>] [hsp=<F>] [sp=<F>]
+                                  [husp=<%>] [desp=<%>]
     Returns None if the command has no sysID or no writable field."""
     sys_id = cmd.get("sysID")
     if not sys_id:
@@ -397,6 +398,9 @@ def _build_set_line(cmd: dict) -> str | None:
     for field in ("csp", "hsp", "sp"):  # float setpoints (Fahrenheit)
         if cmd.get(field) is not None:
             parts.append(f"{field}={float(cmd[field])}")
+    for field in ("husp", "desp"):  # humidify / dehumidify setpoints (%RH)
+        if cmd.get(field) is not None:
+            parts.append(f"{field}={int(cmd[field])}")
     return " ".join(parts) if len(parts) > 3 else None
 
 

@@ -84,6 +84,8 @@ static const unsigned PERIOD_VALID_HSPC       = 32;
 static const unsigned PERIOD_VALID_CSP        = 64;
 static const unsigned PERIOD_VALID_CSPC       = 128;
 static const unsigned PERIOD_VALID_SP         = 256;
+static const unsigned PERIOD_VALID_HUSP       = 4096;   // humidify setpoint (%RH)
+static const unsigned PERIOD_VALID_DESP       = 8192;   // dehumidify setpoint (%RH)
 static const unsigned PERIOD_VALID_FANMODE    = 16384;
 static const unsigned SCHEDULE_VALID_PERIODS = 2;      // Schedule_Valid_Periods
 static const unsigned SCHEDULEUPDATE_VALID_SCHEDULE = 1; // ScheduleUpdate_Valid_Schedule
@@ -171,7 +173,8 @@ struct ScheduleWriter {
   // Override one or more period setpoints for a zone's schedule. `valid` is the
   // OR of PERIOD_VALID_* bits selecting which of mode/hsp/csp/sp are meaningful.
   bool write_period(const std::string& sys_id, unsigned schedule_id, unsigned valid,
-                    int systemMode, double hsp, double csp, double sp, int fanMode) {
+                    int systemMode, double hsp, double csp, double sp, int fanMode,
+                    double husp = 0, double desp = 0) {
     if (!sw) { std::cerr << "[cmd] writer not initialized\n"; return false; }
     if (!wait_for_match(15)) { std::cerr << "[cmd] no matching reader; not writing\n"; return false; }
     if (::getenv("LENNOX_DRY_RUN")) { std::cerr << "[cmd] DRY_RUN: matched OK, skipping write\n"; return true; }
@@ -209,6 +212,11 @@ struct ScheduleWriter {
       if (eff_csp > 0.0) { p.csp = eff_csp; p.cspC = f_to_c_half(eff_csp);
                            out_valid |= PERIOD_VALID_CSP | PERIOD_VALID_CSPC; }
     }
+    // Humidify / dehumidify setpoints (%RH). Only sent when explicitly requested
+    // (their valid bit set) — a plain temperature write never touches them, matching
+    // the app's temp writes (validFlag 241, no humidity bits).
+    if (valid & PERIOD_VALID_HUSP) { p.husp = husp; out_valid |= PERIOD_VALID_HUSP; }
+    if (valid & PERIOD_VALID_DESP) { p.desp = desp; out_valid |= PERIOD_VALID_DESP; }
     // Carry mode/fan (populated like the app); only mark them valid if the caller
     // is actually changing them, so a plain setpoint write stays validFlag 241.
     p.systemMode = static_cast<PD::systemModeEnum>(eff_mode);
@@ -224,7 +232,10 @@ struct ScheduleWriter {
     std::cerr << "[cmd] WROTE scheduleUpdate scheduleId=" << schedule_id
               << " periodValid=" << out_valid << " mode=" << eff_mode
               << " hsp=" << eff_hsp << " csp=" << eff_csp
-              << " fan=" << eff_fan << " (cache=" << (ps.valid ? "hit" : "miss")
+              << " fan=" << eff_fan;
+    if (valid & PERIOD_VALID_HUSP) std::cerr << " husp=" << husp;
+    if (valid & PERIOD_VALID_DESP) std::cerr << " desp=" << desp;
+    std::cerr << " (cache=" << (ps.valid ? "hit" : "miss")
               << ") rc=" << rc << "\n";
     Duration_t settle = { 3, 0 };
     writer->wait_for_acknowledgments(settle);   // let the reliable protocol deliver
@@ -350,7 +361,8 @@ static void handle_command_line(ScheduleWriter& sched, AwayWriter& away, const s
   std::string sys_id; unsigned schedule_id = 0;
   iss >> sys_id >> schedule_id;
   if (sys_id.empty()) { std::cerr << "[cmd] SET missing sysID\n"; return; }
-  unsigned valid = 0; int mode = 0, fan = 0; double hsp = 0, csp = 0, sp = 0;
+  unsigned valid = 0; int mode = 0, fan = 0;
+  double hsp = 0, csp = 0, sp = 0, husp = 0, desp = 0;
   std::string tok;
   while (iss >> tok) {
     const std::string::size_type eq = tok.find('=');
@@ -361,9 +373,11 @@ static void handle_command_line(ScheduleWriter& sched, AwayWriter& away, const s
     else if (k == "csp")  { csp  = std::atof(v.c_str()); valid |= PERIOD_VALID_CSP; }
     else if (k == "sp")   { sp   = std::atof(v.c_str()); valid |= PERIOD_VALID_SP; }
     else if (k == "fan")  { fan  = std::atoi(v.c_str()); valid |= PERIOD_VALID_FANMODE; }
+    else if (k == "husp") { husp = std::atof(v.c_str()); valid |= PERIOD_VALID_HUSP; }
+    else if (k == "desp") { desp = std::atof(v.c_str()); valid |= PERIOD_VALID_DESP; }
   }
   if (!valid) { std::cerr << "[cmd] SET with no recognized fields\n"; return; }
-  sched.write_period(sys_id, schedule_id, valid, mode, hsp, csp, sp, fan);
+  sched.write_period(sys_id, schedule_id, valid, mode, hsp, csp, sp, fan, husp, desp);
 }
 
 static volatile sig_atomic_t g_running = 1;
