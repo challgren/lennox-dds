@@ -99,6 +99,8 @@ def _load_addon_options() -> None:
         os.environ.setdefault("LENNOX_TOPIC", str(opts["topic"]))
     os.environ.setdefault("LENNOX_DOMAIN", str(opts.get("domain", 0)))
     os.environ.setdefault("DCPS_DEBUG", str(opts.get("dcps_debug", 0)))
+    # Health check: max seconds without a sample before the container is UNHEALTHY.
+    os.environ.setdefault("HEALTH_MAX_AGE", str(opts.get("health_max_age", 300)))
     # Debug: `debug` logs every raw sample (any model) for bug reports. `debug_away`
     # additionally subscribes read-only to the away topic (away-state RE).
     if opts.get("debug") or opts.get("debug_away"):
@@ -331,6 +333,37 @@ MQTT_HOST = os.environ.get("MQTT_HOST")
 MQTT_DISCOVERY = os.environ.get("MQTT_DISCOVERY", "0") == "1"  # publish an HA entity?
 RAW_DUMP = os.environ.get("LENNOX_RAW_DUMP", "0") == "1"  # debug: log each raw sample
 
+# Liveness heartbeat: we touch this file every time a zoneStatus sample arrives from
+# the DDS subprocess. The container HEALTHCHECK (healthcheck.sh) reports UNHEALTHY
+# when it goes stale, so "DDS connected but receiving nothing" (relay eviction, cert
+# expiry, device offline) surfaces in HA instead of looking fine. mtime = last
+# sample time; freshness threshold is HEALTH_MAX_AGE seconds (default 300).
+HEARTBEAT_FILE = os.environ.get("LENNOX_HEARTBEAT_FILE", "/tmp/lennox_last_sample")
+# healthcheck.sh runs as a separate process (docker exec) and can't see our env, so
+# we persist the resolved staleness threshold (the `health_max_age` add-on option)
+# to this file for it to read. Env HEALTH_MAX_AGE still wins if set on the container.
+HEALTH_MAX_AGE_FILE = os.environ.get("LENNOX_HEALTH_MAX_AGE_FILE",
+                                     "/tmp/lennox_health_max_age")
+
+
+def _touch_heartbeat() -> None:
+    """Record that a sample was just received (best-effort; never raises)."""
+    try:
+        with open(HEARTBEAT_FILE, "w") as fh:
+            fh.write(str(int(time.time())))
+    except Exception:
+        pass
+
+
+def _persist_health_max_age() -> None:
+    """Write the configured health staleness threshold where healthcheck.sh reads it."""
+    try:
+        with open(HEALTH_MAX_AGE_FILE, "w") as fh:
+            fh.write(str(int(os.environ.get("HEALTH_MAX_AGE", "300"))))
+    except Exception:
+        pass
+
+
 # latest sample per (sysID, zoneId); newly-connected WS clients get a snapshot.
 _latest: dict[str, dict] = {}
 _ws_clients: set = set()
@@ -338,9 +371,12 @@ _mqtt = None  # set if MQTT enabled
 _discovery_sent: set = set()
 _bridge_proc = None  # current asyncio subprocess (for writing control commands)
 
-# HA maps a zone to a schedule override slot: override scheduleId = 32 + zoneId
-# (proven live in Phase 6; manual = 16 + zoneId). Control writes target override.
-SCHEDULE_OVERRIDE_BASE = 32
+# HA maps a zone to a schedule slot. scheduleId = 16 + zoneId is the MANUAL hold
+# slot the Lennox app uses for setpoint changes -> the device applies it promptly.
+# (The 32 + zoneId "override"/scheduled slot applies slowly/variably; verified by
+# a native frida capture of the app's scheduleUpdate -- see memory
+# control-write-latency.) Control writes target the manual slot.
+SCHEDULE_OVERRIDE_BASE = 16
 
 
 def _build_set_line(cmd: dict) -> str | None:
@@ -601,6 +637,7 @@ async def _run_bridge() -> None:
                 continue  # stray non-JSON line
             if RAW_DUMP:
                 print(f"[raw] {line.decode('utf-8', 'replace')}", flush=True)
+            _touch_heartbeat()  # liveness: a sample arrived (see HEARTBEAT_FILE)
             _latest[f"{sample.get('sysID')}:{sample.get('zoneId')}"] = sample
             await _ws_broadcast(sample)
             await _mqtt_publish(sample)
@@ -632,6 +669,7 @@ async def _forward_stderr(stream: asyncio.StreamReader) -> None:
 async def main() -> None:
     if not PARTITION:
         raise SystemExit("LENNOX_PARTITION (login homeId) is required")
+    _persist_health_max_age()  # expose the health threshold to healthcheck.sh
     import websockets  # type: ignore
 
     # Graceful shutdown: SIGTERM/SIGINT (Supervisor stop/restart) sets a stop event

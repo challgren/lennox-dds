@@ -40,8 +40,18 @@ docker build --platform linux/amd64 \
 
 ## Layout notes
 
+- **⚠ Relay participant cap (~2 per home).** Lennox's RtpsRelay admits only ~2 DDS
+  participants per home — the phone **app** + our **add-on**. A **3rd** participant
+  is starved and can **evict** the app (it shows "Offline" until relaunched), so
+  never run an extra DDS participant (a debug subscriber/eavesdropper) while both
+  are up — stop the add-on first. This is why the add-on runs a single participant
+  and the integration is a plain WebSocket client, not its own DDS endpoint.
 - DDS **topics**: `LCC Zone Status` (read), `Owner Schedule Update`
-  (setpoint/mode/fan write), `Owner Manual Away` (Away write). Status topics the
+  (setpoint/mode/fan write — for a setpoint we write the **manual slot**
+  `scheduleId = 16 + zoneId` with a **complete period**: both heat+cool setpoints
+  incl. Celsius, `period.validFlag = 241`, mirroring the app so the M30 applies it
+  promptly; `bridge_server.py` `SCHEDULE_OVERRIDE_BASE`), `Owner Manual Away` (Away
+  write). Status topics the
   bridge also reads: `LCC Manual Away Status` (true away state), `LCC Alert
   Active/Cleared`, `LCC Reminder Status`, `LCC Weather Status`, `LCC Smart Away
   Status`, `LCC System Status`, `LCC Ocst Event/Enrollment Status`. New types use

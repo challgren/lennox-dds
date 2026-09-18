@@ -51,13 +51,19 @@ COPY --from=build /opt/dds-libs /opt/dds-libs
 COPY --from=build /src/sub/lennox_zone_status_sub /app/lennox_zone_status_sub
 COPY opendds_rtps.ini /config/opendds_rtps.ini
 COPY entrypoint.sh /app/entrypoint.sh
+COPY healthcheck.sh /app/healthcheck.sh
 COPY bridge_server.py /app/bridge_server.py
 # credentialed provisioning (login -> mint identity -> download the DDS-Security
 # bundle); imported/run by bridge_server when lennox_email/password are set.
 COPY m30_prod4.py /app/m30_prod4.py
 COPY fetch_security_docs.py /app/fetch_security_docs.py
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh /app/healthcheck.sh
 ENV LD_LIBRARY_PATH=/opt/dds-libs
+# Liveness: UNHEALTHY when no DDS zoneStatus sample has arrived recently (relay
+# eviction / cert expiry / device offline), even though the process is still up.
+# start-period covers login + provisioning + first sample. See healthcheck.sh.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
+  CMD /app/healthcheck.sh || exit 1
 # Default = long-running bridge (DDS -> WebSocket + optional MQTT). For the
 # one-shot connection test, override: --entrypoint /app/entrypoint.sh
 ENTRYPOINT ["python3", "/app/bridge_server.py"]

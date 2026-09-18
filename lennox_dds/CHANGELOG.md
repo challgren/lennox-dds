@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.18
+
+- **Faster setpoint changes.** Setpoint writes now mirror exactly what the Lennox
+  app sends: a **complete period** on the **manual hold slot** (schedule id `16`
+  instead of `32`) carrying **both** the heat and cool setpoints (with their
+  Celsius values) and the `ID` bit — `period.validFlag = 241`. The old write sent a
+  single cool-setpoint on the scheduled-override slot, which the M30 applied slowly
+  and variably (minutes, sometimes reverting). The unspecified setpoint and the
+  mode/fan are filled from the latest zone status so nothing else changes. This was
+  reverse-engineered from a live capture of the app's own DDS write. Writes still
+  land the same way (`WROTE scheduleUpdate … rc=0`); they should now take effect
+  much sooner.
+- **Health check.** The container now reports **unhealthy** when it stops receiving
+  zoneStatus samples (relay eviction, cert expiry, or the thermostat going offline)
+  — previously the process stayed "up" while the data silently froze. Home Assistant
+  surfaces this automatically; enable the add-on's **Watchdog** toggle to have
+  Supervisor auto-restart it. The staleness threshold defaults to 300s (the M30 has
+  multi-minute quiet gaps) and is tunable via the new **`health_max_age`** option
+  (30–3600s).
+
 ## 0.1.17
 
 _Integration-only — update via HACS; the add-on/bridge image is unchanged._

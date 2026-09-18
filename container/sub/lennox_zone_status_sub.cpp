@@ -77,13 +77,44 @@ static std::map<std::string, std::string> g_ocst_enroll;  // json (DR enrollment
 static std::map<std::string, std::map<unsigned long, std::string>> g_reminder_sensors; // id->json
 
 // Period validFlag bits (research/idl/lennox_m30.idl :: Lx_PeriodIDL).
+static const unsigned PERIOD_VALID_ID         = 1;
 static const unsigned PERIOD_VALID_SYSTEMMODE = 8;
 static const unsigned PERIOD_VALID_HSP        = 16;
+static const unsigned PERIOD_VALID_HSPC       = 32;
 static const unsigned PERIOD_VALID_CSP        = 64;
+static const unsigned PERIOD_VALID_CSPC       = 128;
 static const unsigned PERIOD_VALID_SP         = 256;
 static const unsigned PERIOD_VALID_FANMODE    = 16384;
 static const unsigned SCHEDULE_VALID_PERIODS = 2;      // Schedule_Valid_Periods
 static const unsigned SCHEDULEUPDATE_VALID_SCHEDULE = 1; // ScheduleUpdate_Valid_Schedule
+
+// The Lennox app, when it changes a setpoint, sends a COMPLETE period on the
+// MANUAL slot (scheduleId 16): both heat+cool setpoints with their Celsius
+// variants and the ID bit -> period.validFlag = 1+16+32+64+128 = 241. Our earlier
+// csp-only write (validFlag 64, hsp=0, scheduleId 32) applied slowly/variably.
+// Captured live via a native frida hook of the app's scheduleUpdate marshal;
+// see memory control-write-latency. We mirror it: fill the unspecified setpoint
+// and mode/fan from the latest zoneStatus, and send Celsius alongside Fahrenheit.
+static const unsigned PERIOD_VALID_SETPOINTS_FULL =
+    PERIOD_VALID_ID | PERIOD_VALID_HSP | PERIOD_VALID_HSPC |
+    PERIOD_VALID_CSP | PERIOD_VALID_CSPC;   // == 241, the app's setpoint validFlag
+
+// Latest zoneStatus period per sysID, so a control write can send a complete
+// app-faithful period (both setpoints + Celsius + mode/fan) instead of a partial
+// csp-only edit the device treats as a lazy scheduled change.
+struct PeriodSnapshot {
+  bool valid = false;
+  int systemMode = 0, fanMode = 0;
+  double hsp = 0, hspC = 0, csp = 0, cspC = 0;
+};
+static std::map<std::string, PeriodSnapshot> g_period_cache;
+
+// Fahrenheit -> Celsius rounded to the nearest 0.5 (matches the app's cspC/hspC:
+// 74F -> 23.5, 67F -> 19.5).
+static double f_to_c_half(double f) {
+  const double c = (f - 32.0) * 5.0 / 9.0;
+  return (c >= 0.0 ? (long)(c * 2.0 + 0.5) : -(long)(-c * 2.0 + 0.5)) / 2.0;
+}
 
 // Persistent writer on the "Owner Schedule Update" topic. Created once (per run)
 // and reused for every control command: one-shot --set-csp uses it, and in
@@ -145,6 +176,19 @@ struct ScheduleWriter {
     if (!wait_for_match(15)) { std::cerr << "[cmd] no matching reader; not writing\n"; return false; }
     if (::getenv("LENNOX_DRY_RUN")) { std::cerr << "[cmd] DRY_RUN: matched OK, skipping write\n"; return true; }
 
+    // Build an app-faithful COMPLETE period. Start from the latest zoneStatus for
+    // this sysID so the setpoint we are NOT changing (and mode/fan) are preserved,
+    // then apply the requested overrides. Mirrors the app: both heat+cool setpoints
+    // with Celsius, validFlag 241, on the manual slot.
+    PeriodSnapshot ps;
+    { auto it = g_period_cache.find(sys_id); if (it != g_period_cache.end()) ps = it->second; }
+
+    const double eff_hsp  = (valid & PERIOD_VALID_HSP)        ? hsp        : ps.hsp;
+    const double eff_csp  = (valid & PERIOD_VALID_CSP)        ? csp        : ps.csp;
+    const int    eff_mode = (valid & PERIOD_VALID_SYSTEMMODE) ? systemMode : ps.systemMode;
+    const int    eff_fan  = (valid & PERIOD_VALID_FANMODE)    ? fanMode    : ps.fanMode;
+
+    unsigned out_valid = 0;
     SU::scheduleUpdate su;
     su.scheduleId = schedule_id;
     su.sysID = sys_id.c_str();
@@ -152,21 +196,36 @@ struct ScheduleWriter {
     su.schedule.periods.length(1);
     PD::period& p = su.schedule.periods[0];
     p.id = 0;
-    if (valid & PERIOD_VALID_SYSTEMMODE) p.systemMode = static_cast<PD::systemModeEnum>(systemMode);
-    if (valid & PERIOD_VALID_HSP)        p.hsp = hsp;
-    if (valid & PERIOD_VALID_CSP)        p.csp = csp;
-    if (valid & PERIOD_VALID_SP)         p.sp  = sp;
-    if (valid & PERIOD_VALID_FANMODE)    p.fanMode = static_cast<PD::fanmodeEnum>(fanMode);
-    p.validFlag = valid;
+    p.enabled = false;
+    p.startTime = 0;
+    // Single-setpoint systems keep the legacy csp-only/sp path; dual-setpoint
+    // (the M30 default) sends the full period exactly like the app.
+    if ((valid & PERIOD_VALID_SP) && !(valid & (PERIOD_VALID_HSP | PERIOD_VALID_CSP))) {
+      p.sp = sp; out_valid |= PERIOD_VALID_ID | PERIOD_VALID_SP;
+    } else {
+      out_valid |= PERIOD_VALID_ID;
+      if (eff_hsp > 0.0) { p.hsp = eff_hsp; p.hspC = f_to_c_half(eff_hsp);
+                           out_valid |= PERIOD_VALID_HSP | PERIOD_VALID_HSPC; }
+      if (eff_csp > 0.0) { p.csp = eff_csp; p.cspC = f_to_c_half(eff_csp);
+                           out_valid |= PERIOD_VALID_CSP | PERIOD_VALID_CSPC; }
+    }
+    // Carry mode/fan (populated like the app); only mark them valid if the caller
+    // is actually changing them, so a plain setpoint write stays validFlag 241.
+    p.systemMode = static_cast<PD::systemModeEnum>(eff_mode);
+    p.fanMode    = static_cast<PD::fanmodeEnum>(eff_fan);
+    if (valid & PERIOD_VALID_SYSTEMMODE) out_valid |= PERIOD_VALID_SYSTEMMODE;
+    if (valid & PERIOD_VALID_FANMODE)    out_valid |= PERIOD_VALID_FANMODE;
+    p.validFlag = out_valid;
     su.schedule.periodCount = 1;
     su.schedule.validFlag = SCHEDULE_VALID_PERIODS;
     su.validFlag = SCHEDULEUPDATE_VALID_SCHEDULE;
 
     const ReturnCode_t rc = sw->write(su, HANDLE_NIL);
     std::cerr << "[cmd] WROTE scheduleUpdate scheduleId=" << schedule_id
-              << " valid=" << valid << " mode=" << systemMode
-              << " hsp=" << hsp << " csp=" << csp << " sp=" << sp
-              << " fan=" << fanMode << " rc=" << rc << "\n";
+              << " periodValid=" << out_valid << " mode=" << eff_mode
+              << " hsp=" << eff_hsp << " csp=" << eff_csp
+              << " fan=" << eff_fan << " (cache=" << (ps.valid ? "hit" : "miss")
+              << ") rc=" << rc << "\n";
     Duration_t settle = { 3, 0 };
     writer->wait_for_acknowledgments(settle);   // let the reliable protocol deliver
     return rc == RETCODE_OK;
@@ -734,7 +793,71 @@ struct ReminderSensorReader {
   }
 };
 
+// EAVESDROP: read the "Owner Schedule Update" command topic to capture what the
+// LENNOX APP publishes when a setpoint changes, so we can compare it to our own
+// write (scheduleId=32, valid=64, csp only). Also reads "Owner Parameter Update".
+struct EavesdropReader {
+  Subscriber_var sub; SU::scheduleUpdateDataReader_var r;
+  bool init(DomainParticipant_var& dp, const std::string& partition) {
+    SU::scheduleUpdateTypeSupport_var ts = new SU::scheduleUpdateTypeSupportImpl();
+    ts->register_type(dp, "");  // idempotent (writer registered it too)
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var topic = dp->create_topic("Owner Schedule Update", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!topic) { std::cerr << "[eaves] create_topic failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!partition.empty()) { sq.partition.name.length(1); sq.partition.name[0] = partition.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr);
+    dr.reliability.kind = RELIABLE_RELIABILITY_QOS;
+    dr.durability.kind  = VOLATILE_DURABILITY_QOS;   // match the app's command writer
+    dr.representation.value.length(1);
+    dr.representation.value[0] = XCDR2_DATA_REPRESENTATION;
+    dr.type_consistency.kind = ALLOW_TYPE_COERCION;
+    dr.type_consistency.ignore_member_names = true;
+    dr.type_consistency.prevent_type_widening = false;
+    dr.type_consistency.force_type_validation = false;
+    DataReader_var dv = sub->create_datareader(topic, dr, 0, 0); if (!dv) return false;
+    r = SU::scheduleUpdateDataReader::_narrow(dv);
+    if (r) std::cerr << "[eaves] reading 'Owner Schedule Update' (app command capture)\n";
+    return !!r;
+  }
+  void poll() {
+    if (!r) return;
+    SU::scheduleUpdateSeq d; SampleInfoSeq inf;
+    if (r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i) {
+      if (!inf[i].valid_data) continue;
+      const auto& su = d[i];
+      std::cerr << "[EAVES] scheduleUpdate FROM APP: scheduleId=" << su.scheduleId
+                << " sysID=" << su.sysID << " sched.name='" << su.schedule.name
+                << "' sched.validFlag=" << su.schedule.validFlag
+                << " periodCount=" << su.schedule.periodCount
+                << " nPeriods=" << su.schedule.periods.length() << "\n";
+      for (CORBA::ULong p = 0; p < su.schedule.periods.length(); ++p) {
+        const auto& pd = su.schedule.periods[p];
+        std::cerr << "[EAVES]   period[" << p << "] id=" << pd.id << " enabled=" << (int)pd.enabled
+                  << " startTime=" << pd.startTime << " systemMode=" << (int)pd.systemMode
+                  << " fanMode=" << (int)pd.fanMode << " hsp=" << pd.hsp << " csp=" << pd.csp
+                  << " sp=" << pd.sp << " away=" << (int)pd.away
+                  << " period.validFlag=" << pd.validFlag << "\n";
+      }
+    }
+  }
+};
+
 static void print_sample_json(const ZS::zoneStatus& z) {
+  // Cache the latest period so a control write can send a complete app-faithful
+  // period (both setpoints + Celsius + mode/fan). See ScheduleWriter::write_period.
+  {
+    PeriodSnapshot ps;
+    ps.valid = true;
+    ps.systemMode = (int)z.period.systemMode;
+    ps.fanMode    = (int)z.period.fanMode;
+    ps.hsp = z.period.hsp; ps.hspC = z.period.hspC;
+    ps.csp = z.period.csp; ps.cspC = z.period.cspC;
+    g_period_cache[std::string(z.sysID.in())] = ps;
+  }
+
   std::ostringstream o;
   o << "{";
   o << "\"zoneId\":" << z.zoneId;
@@ -956,6 +1079,10 @@ int main(int argc, char** argv) {
     static OcstReader ocst;
     static ReminderSensorReader reminder_sensors;
     const bool have_writer = sched.init(dp, partition);
+    // RE-only: eavesdrop the app's Owner Schedule Update writes. Gated so it never
+    // runs in the shipped add-on (it would also read back our own control writes).
+    static EavesdropReader eaves;
+    if (::getenv("LENNOX_DEBUG_AWAY")) eaves.init(dp, partition);
     away.init(dp, partition);   // best-effort; away control is optional
     if (away_status.init(dp, partition))  // true away-state readback
       std::cerr << "[bridge] away-status reader up on 'LCC Manual Away Status'\n";
@@ -990,6 +1117,7 @@ int main(int argc, char** argv) {
     while (g_running) {
       ConditionSeq active;
       ws->wait(active, poll);      // RETCODE_TIMEOUT when idle -- fine, just re-loop
+      eaves.poll();                // capture app command writes
       away_status.poll();          // refresh true away state before printing
       alerts.poll();               // refresh active alerts before printing
       reminders.poll();

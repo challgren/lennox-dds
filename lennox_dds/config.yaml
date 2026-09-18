@@ -15,7 +15,7 @@
 #      config at /config/lennox_dds/security/ (mapped read-only; see security_dir).
 # Nothing secret is baked into the image.
 name: Lennox iComfort DDS Bridge
-version: "0.1.16"
+version: "0.1.18"
 slug: lennox_dds
 description: OpenDDS sidecar bridging Lennox iComfort (M30 / prod4) realtime data to Home Assistant.
 url: https://github.com/challgren/lennox-dds
@@ -43,6 +43,7 @@ options:
   home_id: ""
   security_dir: "/homeassistant_config/lennox_dds/security"
   dcps_debug: 0
+  health_max_age: 300
   debug: false
   debug_away: false
   mqtt_enabled: false
@@ -55,6 +56,10 @@ schema:
   # longer configurable -- the bridge reads many hardcoded companion topics.
   security_dir: "str?"
   dcps_debug: int
+  # Seconds without a zoneStatus sample before the add-on reports UNHEALTHY. The M30
+  # has multi-minute quiet gaps, so keep this generous (default 300). Enable the
+  # add-on Watchdog toggle to auto-restart on unhealthy.
+  health_max_age: int(30,3600)
   debug: bool                # log every raw sample to the add-on log (for bug reports)
   debug_away: bool           # additionally subscribe read-only to the away topic
   mqtt_enabled: bool
