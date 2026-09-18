@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.21
+
+- **System config reader (groundwork for air/comfort settings).** The bridge now
+  subscribes to `LCC System Config Status` and surfaces the system parameters —
+  **fan circulate time**, **dehumidification overcooling**, the **allergen-defender
+  setting**, ventilation/humidity modes, temperature unit — in the sample as a
+  `config` object. HA entities for these follow in a later release. (On firmware
+  where this config type is XTypes-incompatible it's simply absent — no entities,
+  no errors.)
+
 ## 0.1.20
 
 - **Humidify / Dehumidify setpoint controls.** Two new **number** entities let you

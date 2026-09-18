@@ -23,6 +23,7 @@ cat >> ./lennox_m30.idl <<'IDL'
 #pragma DCPS_DATA_TYPE "LxWeatherStatusIDL::weatherStatus"
 #pragma DCPS_DATA_TYPE "LxSmartAwayStatusIDL::smartAway"
 #pragma DCPS_DATA_TYPE "Lx_SystemStatusIDL::systemStatus"
+#pragma DCPS_DATA_TYPE "Lx_SystemConfigStatusIDL::systemConfigStatus"
 #pragma DCPS_DATA_TYPE "LxOcstEventStatusIDL::ocstEventStatus"
 #pragma DCPS_DATA_TYPE "LxOcstEnrollmentStatusIDL::ocstEnrollmentStatus"
 IDL

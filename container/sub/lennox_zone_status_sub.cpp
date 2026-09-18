@@ -53,6 +53,8 @@ namespace RS = LxReminderStatusIDL;
 namespace WX = LxWeatherStatusIDL;
 namespace SA = LxSmartAwayStatusIDL;
 namespace SY = Lx_SystemStatusIDL;
+namespace SCS = Lx_SystemConfigStatusIDL;
+namespace SP = Lx_SystemParametersIDL;
 namespace OE = LxOcstEventStatusIDL;
 namespace ON = LxOcstEnrollmentStatusIDL;
 namespace RSS = LxReminderSensorStatusIDL;
@@ -71,6 +73,7 @@ static std::map<std::string, std::map<unsigned long, std::string>> g_alerts;
 static std::map<std::string, std::map<unsigned long, std::string>> g_reminders; // id->json
 static std::map<std::string, std::string> g_weather;   // json object
 static std::map<std::string, std::string> g_system;    // json object
+static std::map<std::string, std::string> g_config;    // json object (system params)
 static std::map<std::string, int> g_smartaway;         // -1 unknown / 0 / 1 enabled
 static std::map<std::string, std::string> g_ocst_event;   // json (demand-response event)
 static std::map<std::string, std::string> g_ocst_enroll;  // json (DR enrollment)
@@ -719,6 +722,53 @@ struct SystemReader {
   }
 };
 
+// System config params (LCC System Config Status -> configStatus) -> g_config[sysID].
+// Carries fan circulate time, dehumidification overcooling, the allergen-defender
+// SETTING, ventilation/humidity modes, temp unit, system name. NOTE: like other
+// "config" types (zoneConfigStatus) this MAY return XTypes TK_NONE (inconsistent)
+// on some firmware; if so it simply reads nothing and no "config" object appears
+// (the integration gates its entities on the field being present).
+struct SystemConfigReader {
+  Subscriber_var sub; SCS::systemConfigStatusDataReader_var r;
+  bool init(DomainParticipant_var& dp, const std::string& part) {
+    SCS::systemConfigStatusTypeSupport_var ts = new SCS::systemConfigStatusTypeSupportImpl();
+    if (ts->register_type(dp, "") != RETCODE_OK) { std::cerr << "reg systemConfigStatus failed\n"; return false; }
+    CORBA::String_var tn = ts->get_type_name();
+    Topic_var t = dp->create_topic("LCC System Config Status", tn, TOPIC_QOS_DEFAULT, 0, 0);
+    if (!t) { std::cerr << "create_topic(sysconfig) failed\n"; return false; }
+    SubscriberQos sq; dp->get_default_subscriber_qos(sq);
+    if (!part.empty()) { sq.partition.name.length(1); sq.partition.name[0] = part.c_str(); }
+    sub = dp->create_subscriber(sq, 0, 0); if (!sub) return false;
+    DataReaderQos dr; sub->get_default_datareader_qos(dr); status_dr_qos(dr);
+    DataReader_var dv = sub->create_datareader(t, dr, 0, 0); if (!dv) return false;
+    r = SCS::systemConfigStatusDataReader::_narrow(dv); return !!r;
+  }
+  void poll() {
+    if (!r) return;
+    SCS::systemConfigStatusSeq d; SampleInfoSeq inf;
+    if (r->take(d, inf, LENGTH_UNLIMITED, ANY_SAMPLE_STATE, ANY_VIEW_STATE, ANY_INSTANCE_STATE) != RETCODE_OK) return;
+    for (CORBA::ULong i = 0; i < d.length(); ++i) {
+      if (!inf[i].valid_data) continue;
+      const SP::params& p = d[i].configStatus;
+      std::ostringstream o;
+      o << "{\"circulateTime\":" << p.circulateTime
+        << ",\"allergenDefender\":" << (p.allergenDefender ? "true" : "false")
+        << ",\"dehumOvercoolingF\":" << p.enhancedDehumidificationOvercoolingF
+        << ",\"dehumOvercoolingC\":" << p.enhancedDehumidificationOvercoolingC
+        << ",\"ventilationMode\":" << (int)p.ventilationMode
+        << ",\"humMode\":" << (int)p.humMode
+        << ",\"dehumMode\":" << (int)p.dehumMode
+        << ",\"tempUnit\":" << (int)p.temperatureUnit
+        << ",\"systemName\":\"" << json_escape(p.systemName.in()) << "\"}";
+      g_config[std::string(d[i].sysID)] = o.str();
+      std::cerr << "[config] sysID=" << d[i].sysID
+                << " circulateTime=" << p.circulateTime
+                << " allergenDefender=" << (int)p.allergenDefender
+                << " dehumOvercoolingF=" << p.enhancedDehumidificationOvercoolingF << "\n";
+    }
+  }
+};
+
 // OCST demand-response: event status + enrollment status.
 struct OcstReader {
   Subscriber_var sub; OE::ocstEventStatusDataReader_var er; ON::ocstEnrollmentStatusDataReader_var nr;
@@ -950,6 +1000,8 @@ static void print_sample_json(const ZS::zoneStatus& z) {
     o << ",\"weather\":" << (w != g_weather.end() ? w->second : std::string("null"));
     auto s = g_system.find(sys);
     o << ",\"system\":" << (s != g_system.end() ? s->second : std::string("null"));
+    auto cf = g_config.find(sys);
+    o << ",\"config\":" << (cf != g_config.end() ? cf->second : std::string("null"));
     auto sa = g_smartaway.find(sys);
     if (sa == g_smartaway.end() || sa->second < 0) o << ",\"smartAwayEnabled\":null";
     else o << ",\"smartAwayEnabled\":" << (sa->second ? "true" : "false");
@@ -1090,6 +1142,7 @@ int main(int argc, char** argv) {
     static WeatherReader weather;
     static SmartAwayReader smart_away;
     static SystemReader system_status;
+    static SystemConfigReader system_config;
     static OcstReader ocst;
     static ReminderSensorReader reminder_sensors;
     const bool have_writer = sched.init(dp, partition);
@@ -1110,6 +1163,8 @@ int main(int argc, char** argv) {
       std::cerr << "[bridge] smart-away reader up on 'LCC Smart Away Status'\n";
     if (system_status.init(dp, partition))
       std::cerr << "[bridge] system reader up on 'LCC System Status'\n";
+    if (system_config.init(dp, partition))
+      std::cerr << "[bridge] system-config reader up on 'LCC System Config Status'\n";
     if (ocst.init(dp, partition))
       std::cerr << "[bridge] ocst reader up on 'LCC Ocst Event/Enrollment Status'\n";
     if (reminder_sensors.init(dp, partition))
@@ -1138,6 +1193,7 @@ int main(int argc, char** argv) {
       weather.poll();
       smart_away.poll();
       system_status.poll();
+      system_config.poll();
       ocst.poll();
       reminder_sensors.poll();
       take_and_print();

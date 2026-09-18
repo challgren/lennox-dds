@@ -525,6 +525,7 @@ module Lx_SystemParametersIDL {
     enum dehumidificationModeEnum { kDehumidificationMode0 }; // TODO confirm
     enum ventilationModeEnum   { kVentilationMode0 };     // TODO confirm
 
+    @autoid(HASH) @mutable @nested(TRUE)
     struct params {
         temperatureUnitEnum       temperatureUnit;                    // wire 0
         languageEnum              language;                           //      1
@@ -550,6 +551,7 @@ module Lx_SystemConfigStatusIDL {
     const unsigned long SysConfigStatus_Valid_HVACReconfigTimeStamp= 2;
     const unsigned long SysConfigStatus_Valid_CentralMode          = 4;
 
+    @autoid(HASH) @mutable @nested(FALSE)
     struct systemConfigStatus {
         string                        sysID;         // wire pos 0
         Lx_SystemParametersIDL::params configStatus; //          1
