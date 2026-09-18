@@ -18,11 +18,21 @@ from .const import DOMAIN
 from .coordinator import M30BridgeCoordinator
 
 # (suffix, name, device_class, unit, value_fn)
+# Setpoints come straight from the active period (csp/hsp are ALWAYS published, in
+# every HVAC mode), so both show as dedicated sensors regardless of mode — unlike the
+# climate entity, which only exposes the mode-relevant target. Declared °F with a
+# temperature device_class, so HA auto-converts them for a °C household. Exposing them
+# as sensors also puts setpoint changes in normal history/logbook (the climate
+# logbook only records HVAC-mode changes, not setpoint changes).
 SENSORS: list[tuple] = [
     ("temperature", "Temperature", SensorDeviceClass.TEMPERATURE,
      UnitOfTemperature.FAHRENHEIT, lambda z: z.get("temperature")),
     ("humidity", "Humidity", SensorDeviceClass.HUMIDITY,
      PERCENTAGE, lambda z: z.get("humidity")),
+    ("cool_setpoint", "Cool Setpoint", SensorDeviceClass.TEMPERATURE,
+     UnitOfTemperature.FAHRENHEIT, lambda z: (z.get("period") or {}).get("csp")),
+    ("heat_setpoint", "Heat Setpoint", SensorDeviceClass.TEMPERATURE,
+     UnitOfTemperature.FAHRENHEIT, lambda z: (z.get("period") or {}).get("hsp")),
 ]
 
 # System-wide sensors (per sysID), sourced from the merged system/weather objects.

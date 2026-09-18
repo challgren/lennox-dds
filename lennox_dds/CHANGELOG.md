@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.19
+
+_Integration-only — update via HACS; the add-on/bridge image is unchanged._
+
+- **Cool Setpoint & Heat Setpoint sensors.** Two new sensors expose the cool and
+  heat setpoints directly (read from the zone's active period, so **both are shown in
+  every HVAC mode** — not just the mode-relevant one the climate card shows). They're
+  °F with a temperature device_class, so Home Assistant auto-converts them for a °C
+  household. Because they're sensors, setpoint changes now appear in normal history
+  and the logbook — the climate entity's logbook only records HVAC-*mode* changes,
+  never setpoint (attribute) changes, which is why setpoint edits looked like "no
+  activity."
+
 ## 0.1.18
 
 - **Faster setpoint changes.** Setpoint writes now mirror exactly what the Lennox
